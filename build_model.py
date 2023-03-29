@@ -4,6 +4,7 @@ from smplx import SMPL, SMPLH, SMPLX, MANO, FLAME
 
 betas = torch.zeros(1, 10)
 global_orient = torch.zeros(1, 3)
+transl = torch.tensor([[0.2152373504638672, 0.3666369915008545, 1.7001419639587403]]),
 
 NUM_BODY_JOINTS = 21
 NUM_HAND_JOINTS = 15
@@ -43,7 +44,7 @@ for bm in SMPL, SMPLX, MANO, FLAME:
             'reye_pose': torch.zeros(1, 3),
         }
 
-    model_output = model(global_orient=global_orient, betas=betas, **input_args)
+    model_output = model(global_orient=global_orient, betas=betas, transl=transl, **input_args)
     print(f'{bm.__name__} - NUM_BODY_JOINTS {model.NUM_BODY_JOINTS}, NUM_JOINTS {model.NUM_JOINTS}, NUM_BETAS {model.num_betas}')
     for k,v in model_output.items():
         if isinstance(v, torch.Tensor):

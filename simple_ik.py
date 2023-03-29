@@ -17,37 +17,44 @@ def timeit(func):
     return wrapper
 
 @timeit
-def simple_ik_solver(model, target, init=None, device='cpu', max_iter=20,
+def simple_ik_solver(model, target, init=None, global_orient=None, device='cpu', max_iter=20,
                      mse_threshold=1e-8, transl=torch.zeros(1, 3), betas=None):
     if init is None:
         init_pose = torch.zeros(1, 69, requires_grad=True).to(device)
     else:
         init_pose = init.reshape(-1).unsqueeze(0).to(device)
         init_pose = init_pose.requires_grad_(True)
-    optimizer = torch.optim.Adam([init_pose], lr=0.1)
+    if global_orient is None:
+        global_orient_pose = torch.zeros(1, 3, requires_grad=True).to(device)
+    else:
+        global_orient_pose = global_orient.reshape(-1).unsqueeze(0).to(device)
+        global_orient_pose = global_orient_pose.requires_grad_(True)
+
+    optimizer = torch.optim.Adam([init_pose, global_orient_pose], lr=0.1)
     last_mse = 0
     for i in range(max_iter):
 
         mse = torch.mean(torch.square((
                 model(
                     body_pose=init_pose,
+                    global_orient=global_orient_pose,
                     betas=betas,
                     transl=transl,
-                ).joints[0,:22] - target)))
+                ).joints[0,:24] - target)))
         # print(i, mse.item())
         if abs(mse - last_mse) < mse_threshold:
-            return init_pose
+            return init_pose, global_orient_pose
         optimizer.zero_grad()
         mse.backward(retain_graph=True)
         optimizer.step()
         last_mse = mse
     logger.info(f'IK final loss {last_mse.item():.3f}')
-    return init_pose
+    return init_pose, global_orient_pose
 
 if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SMPL(f'data/body_models/smpl').float()
-    joints = model().joints[0,:22]
+    joints = model().joints[0,:24]
     # joints[22] = joints[22] + 0.3
     # joints[20] = joints[20] + 0.3
 

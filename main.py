@@ -39,7 +39,13 @@ from loguru import logger
 import open3d.visualization.gui as gui
 import scipy.spatial.transform.rotation as R
 import open3d.visualization.rendering as rendering
-
+import json
+from pytorch3d import transforms
+import json
+import shutil
+import time
+from parse_skeleton import parse_skeleton_xml
+import subprocess
 
 from utils import (
     get_checkerboard_plane,
@@ -184,7 +190,7 @@ class Settings:
         self.mouse_model = gui.SceneWidget.Controls.ROTATE_CAMERA
         self.bg_color = gui.Color(1, 1, 1)
         self.show_skybox = False
-        self.show_axes = True
+        self.show_axes = False
         self.show_ground = True
         self.use_ibl = True
         self.use_sun = True
@@ -201,9 +207,9 @@ class Settings:
             Settings.NORMALS: rendering.MaterialRecord(),
             Settings.DEPTH: rendering.MaterialRecord()
         }
-        self._materials[Settings.LIT].base_color = [0.9, 0.9, 0.9, 1.0]
-        self._materials[Settings.LIT].shader = Settings.LIT
-        self._materials[Settings.UNLIT].base_color = [0.9, 0.9, 0.9, 1.0]
+        self._materials[Settings.LIT].base_color = [0.9, 0.9, 0.9, 0.5]
+        self._materials[Settings.LIT].shader = "defaultLitTransparency" #Settings.LIT
+        self._materials[Settings.UNLIT].base_color = [0.9, 0.9, 0.9, 0.5]
         self._materials[Settings.UNLIT].shader = Settings.UNLIT
         self._materials[Settings.NORMALS].shader = Settings.NORMALS
         self._materials[Settings.DEPTH].shader = Settings.DEPTH
@@ -244,15 +250,19 @@ class AppWindow:
         Settings.LIT, Settings.UNLIT, Settings.NORMALS, Settings.DEPTH
     ]
 
-    BODY_MODEL_NAMES = ["SMPL", "SMPLX", "MANO", "FLAME"]
+    BODY_MODEL_NAMES = ["SMPL","SMPL2", "SMPLX", "MANO", "FLAME"]
     BODY_MODEL_GENDERS = {
         'SMPL': ['neutral', 'male', 'female'],
+        'SMPL2': ['neutral', 'male', 'female'],
+        'SMPL3': ['neutral', 'male', 'female'],
         'SMPLX': ['neutral', 'male', 'female'],
         'MANO': ['neutral'],
         'FLAME': ['neutral', 'male', 'female']
     }
     BODY_MODEL_N_BETAS = {
         'SMPL': 10,
+        'SMPL2': 10,
+        'SMPL3': 10,
         'SMPLX': 10,
         'MANO': 10,
         'FLAME': 10,
@@ -263,6 +273,14 @@ class AppWindow:
 
     POSE_PARAMS = {
         'SMPL': {
+            'body_pose': torch.zeros(1, 23, 3),
+            'global_orient': torch.zeros(1, 1, 3),
+        },
+        'SMPL2': {
+            'body_pose': torch.zeros(1, 23, 3),
+            'global_orient': torch.zeros(1, 1, 3),
+        },
+        'SMPL3': {
             'body_pose': torch.zeros(1, 23, 3),
             'global_orient': torch.zeros(1, 1, 3),
         },
@@ -293,6 +311,14 @@ class AppWindow:
             'global_orient': ['root'],
             'body_pose': smpl_joint_names,
         },
+        'SMPL2': {
+            'global_orient': ['root'],
+            'body_pose': copy.deepcopy(smpl_joint_names),
+        },
+        'SMPL3': {
+            'global_orient': ['root'],
+            'body_pose': copy.deepcopy(smpl_joint_names),
+        },
         'SMPLX': {
             'global_orient': ['root'],
             'body_pose': smplx_body_joint_names,
@@ -317,6 +343,8 @@ class AppWindow:
 
     KEYPOINT_NAMES = {
         'SMPL': SMPL_NAMES,
+        'SMPL2': copy.deepcopy(SMPL_NAMES),
+        'SMPL3': copy.deepcopy(SMPL_NAMES),
         'SMPLX': SMPLX_NAMES,
         'MANO': MANO_NAMES,
         'FLAME': FLAME_KEYPOINT_NAMES,
@@ -326,7 +354,19 @@ class AppWindow:
     SELECTED_JOINT = None
     BODY_TRANSL = None
 
-    def __init__(self, width, height):
+    CUR_ITEM_INDEX = 0
+    CUR_FRAME_INDEX = 0
+
+    def __init__(self, width, height, item_infos, labeled_data_path, keypoints_fixed_path, data_path):
+        self.item_infos = item_infos
+        self.labeled_data_path = labeled_data_path
+        self.keypoints_fixed_path = keypoints_fixed_path
+        self.data_path = data_path
+
+        #print("app window pose params smpl", AppWindow.POSE_PARAMS["SMPL"])
+        #print("app window pose params smpl2", AppWindow.POSE_PARAMS["SMPL2"])
+        #print("app window pose params smpl3", AppWindow.POSE_PARAMS["SMPL3"])
+
         self.settings = Settings()
         resource_path = gui.Application.instance.resource_path
         self.settings.new_ibl_name = resource_path + "/" + AppWindow.DEFAULT_IBL
@@ -339,6 +379,8 @@ class AppWindow:
         self._scene = gui.SceneWidget()
         self._scene.scene = rendering.Open3DScene(w.renderer)
         self._scene.set_on_sun_direction_changed(self._on_sun_dir)
+
+        self._scene.scene.set_background([1,1,1,1], item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['background_img'])
 
         # ---- Settings panel ----
         # Rather than specifying sizes in pixels, which may vary in size based
@@ -365,59 +407,59 @@ class AppWindow:
         # space for all its children when open, but only enough for text when
         # closed. This is useful for property pages, so the user can hide sets
         # of properties they rarely use.
-        view_ctrls = gui.CollapsableVert("View controls", 0.25 * em,
-                                         gui.Margins(em, 0, 0, 0))
+        #view_ctrls = gui.CollapsableVert("View controls", 0.25 * em,
+                                         #gui.Margins(em, 0, 0, 0))
 
-        view_ctrls.set_is_open(False)
-        self._arcball_button = gui.Button("Arcball")
-        self._arcball_button.horizontal_padding_em = 0.5
-        self._arcball_button.vertical_padding_em = 0
-        self._arcball_button.set_on_clicked(self._set_mouse_mode_rotate)
-        self._fly_button = gui.Button("Fly")
-        self._fly_button.horizontal_padding_em = 0.5
-        self._fly_button.vertical_padding_em = 0
-        self._fly_button.set_on_clicked(self._set_mouse_mode_fly)
-        self._model_button = gui.Button("Model")
-        self._model_button.horizontal_padding_em = 0.5
-        self._model_button.vertical_padding_em = 0
-        self._model_button.set_on_clicked(self._set_mouse_mode_model)
-        self._sun_button = gui.Button("Sun")
-        self._sun_button.horizontal_padding_em = 0.5
-        self._sun_button.vertical_padding_em = 0
-        self._sun_button.set_on_clicked(self._set_mouse_mode_sun)
-        self._ibl_button = gui.Button("Environment")
-        self._ibl_button.horizontal_padding_em = 0.5
-        self._ibl_button.vertical_padding_em = 0
-        self._ibl_button.set_on_clicked(self._set_mouse_mode_ibl)
-        self._pick_button = gui.Button("Pick")
-        self._pick_button.horizontal_padding_em = 0.5
-        self._pick_button.vertical_padding_em = 0
-        self._pick_button.set_on_clicked(self._set_mouse_mode_pick)
-        view_ctrls.add_child(gui.Label("Mouse controls"))
+        #view_ctrls.set_is_open(False)
+        #self._arcball_button = gui.Button("Arcball")
+        #self._arcball_button.horizontal_padding_em = 0.5
+        #self._arcball_button.vertical_padding_em = 0
+        #self._arcball_button.set_on_clicked(self._set_mouse_mode_rotate)
+        #self._fly_button = gui.Button("Fly")
+        #self._fly_button.horizontal_padding_em = 0.5
+        #self._fly_button.vertical_padding_em = 0
+        #self._fly_button.set_on_clicked(self._set_mouse_mode_fly)
+        #self._model_button = gui.Button("Model")
+        #self._model_button.horizontal_padding_em = 0.5
+        #self._model_button.vertical_padding_em = 0
+        #self._model_button.set_on_clicked(self._set_mouse_mode_model)
+        #self._sun_button = gui.Button("Sun")
+        #self._sun_button.horizontal_padding_em = 0.5
+        #self._sun_button.vertical_padding_em = 0
+        #self._sun_button.set_on_clicked(self._set_mouse_mode_sun)
+        #self._ibl_button = gui.Button("Environment")
+        #self._ibl_button.horizontal_padding_em = 0.5
+        #self._ibl_button.vertical_padding_em = 0
+        #self._ibl_button.set_on_clicked(self._set_mouse_mode_ibl)
+        #self._pick_button = gui.Button("Pick")
+        #self._pick_button.horizontal_padding_em = 0.5
+        #self._pick_button.vertical_padding_em = 0
+        #self._pick_button.set_on_clicked(self._set_mouse_mode_pick)
+        #view_ctrls.add_child(gui.Label("Mouse controls"))
         # We want two rows of buttons, so make two horizontal layouts. We also
         # want the buttons centered, which we can do be putting a stretch item
         # as the first and last item. Stretch items take up as much space as
         # possible, and since there are two, they will each take half the extra
         # space, thus centering the buttons.
-        h = gui.Horiz(0.25 * em)  # row 1
-        h.add_stretch()
-        h.add_child(self._arcball_button)
-        h.add_child(self._fly_button)
-        h.add_child(self._model_button)
-        h.add_stretch()
-        view_ctrls.add_child(h)
-        h = gui.Horiz(0.25 * em)  # row 2
-        h.add_stretch()
-        h.add_child(self._sun_button)
-        h.add_child(self._ibl_button)
-        h.add_child(self._pick_button)
-        h.add_stretch()
-        view_ctrls.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 1
+        #h.add_stretch()
+        #h.add_child(self._arcball_button)
+        #h.add_child(self._fly_button)
+        #h.add_child(self._model_button)
+        #h.add_stretch()
+        #view_ctrls.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 2
+        #h.add_stretch()
+        #h.add_child(self._sun_button)
+        #h.add_child(self._ibl_button)
+        #h.add_child(self._pick_button)
+        #h.add_stretch()
+       # view_ctrls.add_child(h)
 
         self._show_skybox = gui.Checkbox("Show skymap")
         self._show_skybox.set_on_checked(self._on_show_skybox)
-        view_ctrls.add_fixed(separation_height)
-        view_ctrls.add_child(self._show_skybox)
+        #view_ctrls.add_fixed(separation_height)
+        #view_ctrls.add_child(self._show_skybox)
 
         self._bg_color = gui.ColorEdit()
         self._bg_color.set_on_value_changed(self._on_bg_color)
@@ -425,42 +467,42 @@ class AppWindow:
         grid = gui.VGrid(2, 0.25 * em)
         grid.add_child(gui.Label("BG Color"))
         grid.add_child(self._bg_color)
-        view_ctrls.add_child(grid)
+        #view_ctrls.add_child(grid)
 
         self._show_axes = gui.Checkbox("Show axes")
         self._show_axes.set_on_checked(self._on_show_axes)
-        view_ctrls.add_fixed(separation_height)
-        view_ctrls.add_child(self._show_axes)
+        #view_ctrls.add_fixed(separation_height)
+        #view_ctrls.add_child(self._show_axes)
 
         self._show_ground = gui.Checkbox("Show ground")
         self._show_ground.set_on_checked(self._on_show_ground)
-        view_ctrls.add_fixed(separation_height)
-        view_ctrls.add_child(self._show_ground)
+        #view_ctrls.add_fixed(separation_height)
+        #view_ctrls.add_child(self._show_ground)
 
         self._profiles = gui.Combobox()
         for name in sorted(Settings.LIGHTING_PROFILES.keys()):
             self._profiles.add_item(name)
         self._profiles.add_item(Settings.CUSTOM_PROFILE_NAME)
         self._profiles.set_on_selection_changed(self._on_lighting_profile)
-        view_ctrls.add_fixed(separation_height)
-        view_ctrls.add_child(gui.Label("Lighting profiles"))
-        view_ctrls.add_child(self._profiles)
-        self._settings_panel.add_fixed(separation_height)
-        self._settings_panel.add_child(view_ctrls)
+        #view_ctrls.add_fixed(separation_height)
+        #view_ctrls.add_child(gui.Label("Lighting profiles"))
+        #view_ctrls.add_child(self._profiles)
+        #self._settings_panel.add_fixed(separation_height)
+        #self._settings_panel.add_child(view_ctrls)
 
-        advanced = gui.CollapsableVert("Advanced lighting", 0,
-                                       gui.Margins(em, 0, 0, 0))
-        advanced.set_is_open(False)
+        #advanced = gui.CollapsableVert("Advanced lighting", 0,
+                                       #gui.Margins(em, 0, 0, 0))
+        #advanced.set_is_open(False)
 
         self._use_ibl = gui.Checkbox("HDR map")
         self._use_ibl.set_on_checked(self._on_use_ibl)
         self._use_sun = gui.Checkbox("Sun")
         self._use_sun.set_on_checked(self._on_use_sun)
-        advanced.add_child(gui.Label("Light sources"))
-        h = gui.Horiz(em)
-        h.add_child(self._use_ibl)
-        h.add_child(self._use_sun)
-        advanced.add_child(h)
+        #advanced.add_child(gui.Label("Light sources"))
+        #h = gui.Horiz(em)
+        #h.add_child(self._use_ibl)
+        #h.add_child(self._use_sun)
+        #advanced.add_child(h)
 
         self._ibl_map = gui.Combobox()
         for ibl in glob.glob(gui.Application.instance.resource_path +
@@ -477,9 +519,9 @@ class AppWindow:
         grid.add_child(self._ibl_map)
         grid.add_child(gui.Label("Intensity"))
         grid.add_child(self._ibl_intensity)
-        advanced.add_fixed(separation_height)
-        advanced.add_child(gui.Label("Environment"))
-        advanced.add_child(grid)
+        #advanced.add_fixed(separation_height)
+        #advanced.add_child(gui.Label("Environment"))
+        #advanced.add_child(grid)
 
         self._sun_intensity = gui.Slider(gui.Slider.INT)
         self._sun_intensity.set_limits(0, 200000)
@@ -495,16 +537,36 @@ class AppWindow:
         grid.add_child(self._sun_dir)
         grid.add_child(gui.Label("Color"))
         grid.add_child(self._sun_color)
-        advanced.add_fixed(separation_height)
-        advanced.add_child(gui.Label("Sun (Directional light)"))
-        advanced.add_child(grid)
+        #advanced.add_fixed(separation_height)
+        #advanced.add_child(gui.Label("Sun (Directional light)"))
+        #advanced.add_child(grid)
+
+        #self._settings_panel.add_fixed(separation_height)
+        #self._settings_panel.add_child(advanced)
+
+        item_iteration_settings = gui.CollapsableVert("Item info", 0,
+                                                gui.Margins(em, 0, 0, 0))
+        item_iteration_settings.set_is_open(True)
+        self._next_frame = gui.Button("Next frame")
+        self._next_frame.set_on_clicked(self._on_next_frame)
+        item_iteration_settings.add_child(self._next_frame)
+        self._previous_frame = gui.Button("Previous frame")
+        item_iteration_settings.add_child(self._previous_frame)
+        self._previous_frame.set_on_clicked(self._on_previous_frame)
+        self._update_keypoints = gui.Button("Update keypoints")
+        item_iteration_settings.add_child(self._update_keypoints)
+        self._update_keypoints.set_on_clicked(self._on_update_keypoints)
+        self._export_results = gui.Button("Export results")
+        item_iteration_settings.add_child(self._export_results)
+        self._export_results.set_on_clicked(self._on_export_results)
 
         self._settings_panel.add_fixed(separation_height)
-        self._settings_panel.add_child(advanced)
+        self._settings_panel.add_child(item_iteration_settings)
+
 
         material_settings = gui.CollapsableVert("Material settings", 0,
                                                 gui.Margins(em, 0, 0, 0))
-        material_settings.set_is_open(False)
+        material_settings.set_is_open(True)
 
         self._shader = gui.Combobox()
         self._shader.add_item(AppWindow.MATERIAL_NAMES[0])
@@ -519,19 +581,25 @@ class AppWindow:
         self._material_prefab.set_on_selection_changed(self._on_material_prefab)
         self._material_color = gui.ColorEdit()
         self._material_color.set_on_value_changed(self._on_material_color)
+        self._material_opacity = gui.Slider(gui.Slider.DOUBLE)
+        self._material_opacity.set_limits(0.0, 1.0)
+        self._material_opacity.set_on_value_changed(self._on_opacity)
         self._point_size = gui.Slider(gui.Slider.INT)
         self._point_size.set_limits(1, 10)
         self._point_size.set_on_value_changed(self._on_point_size)
 
         grid = gui.VGrid(2, 0.25 * em)
-        grid.add_child(gui.Label("Type"))
-        grid.add_child(self._shader)
-        grid.add_child(gui.Label("Material"))
-        grid.add_child(self._material_prefab)
-        grid.add_child(gui.Label("Color"))
-        grid.add_child(self._material_color)
-        grid.add_child(gui.Label("Point size"))
-        grid.add_child(self._point_size)
+        #grid.add_child(gui.Label("Type"))
+        #grid.add_child(self._shader)
+        #grid.add_child(gui.Label("Material"))
+        #grid.add_child(self._material_prefab)
+        #grid.add_child(gui.Label("Color"))
+        #grid.add_child(self._material_color)
+        grid.add_child(gui.Label("Opacity"))
+        grid.add_child(self._material_opacity)
+        #grid.add_child(self._camera_reset)
+        #grid.add_child(gui.Label("Point size"))
+        #grid.add_child(self._point_size)
         material_settings.add_child(grid)
 
         self._settings_panel.add_fixed(separation_height)
@@ -560,8 +628,10 @@ class AppWindow:
             self._body_model_shape_comp.add_item(f'{i+1:02d}')
 
         self._body_beta_val = gui.Slider(gui.Slider.DOUBLE)
-        self._body_beta_val.set_limits(-5.0, 5.0)
+        self._body_beta_val.set_limits(-2, 2.0)
         self._body_beta_tensor = torch.zeros(1, 10)
+        #print("BETAS", smpl_params["betas"], torch.zeros(1,10), torch.tensor(smpl_params["betas"]))
+        #self._body_beta_tensor = copy.deepcopy(torch.tensor([smpl_params["betas"]]))
         self._body_beta_reset = gui.Button("Reset betas")
 
         self._body_beta_text = gui.Label("Betas")
@@ -632,8 +702,8 @@ class AppWindow:
         grid = gui.VGrid(2, 0.25 * em)
         grid.add_child(gui.Label("Body Model"))
         grid.add_child(self._body_model)
-        grid.add_child(gui.Label("Gender"))
-        grid.add_child(self._body_model_gender)
+        #grid.add_child(gui.Label("Gender"))
+        #grid.add_child(self._body_model_gender)
         grid.add_child(gui.Label("Beta Component"))
         grid.add_child(self._body_model_shape_comp)
         grid.add_child(gui.Label("Beta val:"))
@@ -648,25 +718,25 @@ class AppWindow:
         h.add_child(self._body_beta_reset)
         self.model_settings.add_child(h)
 
-        grid = gui.VGrid(2, 0.25 * em)
-        grid.add_child(gui.Label("Exp Component"))
-        grid.add_child(self._body_model_exp_comp)
-        grid.add_child(gui.Label("Exp val:"))
-        grid.add_child(self._body_exp_val)
-        self.model_settings.add_child(grid)
+        #grid = gui.VGrid(2, 0.25 * em)
+        #grid.add_child(gui.Label("Exp Component"))
+        #grid.add_child(self._body_model_exp_comp)
+        #grid.add_child(gui.Label("Exp val:"))
+        #grid.add_child(self._body_exp_val)
+        #self.model_settings.add_child(grid)
 
-        h = gui.Horiz(0.25 * em)  # row 2
-        h.add_child(self._body_exp_reset)
-        self.model_settings.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 2
+        #h.add_child(self._body_exp_reset)
+        #self.model_settings.add_child(h)
 
         h = gui.Horiz(0.25 * em)  # row 2
         h.add_child(self._show_joints)
         h.add_child(self._show_joint_labels)
         self.model_settings.add_child(h)
 
-        h = gui.Horiz(0.25 * em)  # row 3
-        h.add_child(gui.Label("Pose Controls"))
-        self.model_settings.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 3
+        #h.add_child(gui.Label("Pose Controls"))
+        #self.model_settings.add_child(h)
 
         # grid.add_child(gui.Label("Beta"))
         # grid.add_child(self._body_beta_text)
@@ -683,17 +753,17 @@ class AppWindow:
         grid.add_child(self._body_pose_joint_y)
         grid.add_child(gui.Label("rot_z"))
         grid.add_child(self._body_pose_joint_z)
-        self.model_settings.add_child(grid)
+        #self.model_settings.add_child(grid)
 
         h = gui.Horiz(0.25 * em)  # row 2
         h.add_child(self._body_pose_reset)
         # h.add_child(gui.VectorEdit())
-        self.model_settings.add_child(h)
+        #self.model_settings.add_child(h)
 
         h = gui.Horiz(0.25 * em)  # row 2
         h.add_child(self._body_pose_ik)
         # h.add_child(gui.VectorEdit())
-        self.model_settings.add_child(h)
+        #self.model_settings.add_child(h)
 
         self._settings_panel.add_fixed(separation_height)
         self._settings_panel.add_child(self.model_settings)
@@ -781,7 +851,7 @@ class AppWindow:
             self.settings.bg_color.red, self.settings.bg_color.green,
             self.settings.bg_color.blue, self.settings.bg_color.alpha
         ]
-        self._scene.scene.set_background(bg_color)
+        self._scene.scene.set_background([1, 1, 1, 1], self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['background_img'])
         self._scene.scene.show_skybox(self.settings.show_skybox)
         self._scene.scene.show_axes(self.settings.show_axes)
         if self.settings.new_ibl_name is not None:
@@ -904,12 +974,12 @@ class AppWindow:
             if self._scene.scene.has_geometry(f"__joints_{i}__"):
                 self._scene.scene.remove_geometry(f"__joints_{i}__")
 
-        green = [0.3, 0.7, 0.3, 1.0]
-        red = [0.7, 0.3, 0.3, 1.0]
-        hand_radius = 0.01
-        foot_radius = 0.01
+        green = [0.3, 0.7, 0.3, 0.5]
+        red = [0.7, 0.3, 0.3, 0.5]
+        hand_radius = 0.007
+        foot_radius = 0.007
         head_radius = 0.007
-        body_radius = 0.05
+        body_radius = 0.007
         joint_names = AppWindow.KEYPOINT_NAMES[self._body_model.selected_text]
 
         mat = rendering.MaterialRecord()
@@ -999,8 +1069,8 @@ class AppWindow:
 
     def _on_body_model(self, name, index):
         logger.info(f"Loading body model {name}-{index}")
-        self._body_beta_val.double_value = 0.0
-        AppWindow.CAM_FIRST = True
+        #self._body_beta_val.double_value = 0.0
+        #AppWindow.CAM_FIRST = True
         self.load_body_model(name)
         self._body_model_gender.clear_items()
 
@@ -1158,6 +1228,8 @@ class AppWindow:
         return gui.Widget.EventCallbackResult.IGNORED
 
     def _on_mouse_widget(self, event):
+        if event.type == gui.MouseEvent.Type.WHEEL or event.type == gui.MouseEvent.Type.DRAG:
+            return gui.Widget.EventCallbackResult.CONSUMED
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
 
@@ -1299,6 +1371,16 @@ class AppWindow:
         self.settings.apply_material = True
         self._apply_settings()
 
+    def _on_opacity(self, opacity):
+        self.settings.material.base_color = [
+            self.settings.material.base_color[0],
+            self.settings.material.base_color[1], 
+            self.settings.material.base_color[2],
+            opacity
+        ]
+        self.settings.apply_material = True
+        self._apply_settings()
+
     def _on_point_size(self, size):
         self.settings.material.point_size = int(size)
         self.settings.apply_material = True
@@ -1422,6 +1504,61 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
+    def _on_next_frame(self):
+        if AppWindow.CUR_FRAME_INDEX + 1 < len(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames']):
+            AppWindow.CUR_FRAME_INDEX += 1
+        self._scene.scene.set_background([1,1,1,1], self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['background_img'])
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
+    def _on_previous_frame(self):
+        if AppWindow.CUR_FRAME_INDEX - 1 >= 0:
+            AppWindow.CUR_FRAME_INDEX -= 1
+        self._scene.scene.set_background([1,1,1,1], self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['background_img'])
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
+    def _on_update_keypoints(self):
+        cur_frame_info = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]
+        self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'], self.keypoints_fixed_path, self.data_path)
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
+    def _on_export_results(self):
+        results_directory = os.path.join(self.labeled_data_path, self.item_infos[AppWindow.CUR_ITEM_INDEX]['id'])
+        if not os.path.exists(results_directory):
+            os.makedirs(results_directory)
+            os.makedirs(results_directory + '/images')
+
+        if self._body_model.selected_text == "SMPL":
+            betas = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas']
+        else:
+            betas = np.array(self._body_beta_tensor).tolist()
+        output_dict = {
+            'betas': betas
+        }
+        print("betas {} {} {}".format(betas, self._body_beta_tensor, output_dict))
+        with open(os.path.join(results_directory, 'params.json'), 'w') as fw:
+            json.dump(output_dict, fw)
+        #for i in range(len(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'])):
+        #    AppWindow.CUR_FRAME_INDEX = i
+        #self._scene.scene.set_background([1,1,1,1], self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][i]['background_img'])
+        #self.load_body_model(
+        #    self._body_model.selected_text,
+        #    gender=self._body_model_gender.selected_text,
+        #)
+        img_export_path = os.path.join(results_directory, 'images', self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['id'] + '.jpg')
+        print(img_export_path)
+        frame = self._scene.frame
+        print(frame)
+        self.export_image(img_export_path, frame.width, frame.height)
+
     def add_ground_plane(self):
         logger.info('drawing ground plane')
         gp = get_checkerboard_plane(plane_width=2, num_boxes=9)
@@ -1441,48 +1578,118 @@ class AppWindow:
                     extra_params['use_pca'] = False
                     extra_params['flat_hand_mean'] = True
                     extra_params['use_face_contour'] = True
-                model = eval(body_model.upper())(f'data/body_models/{body_model.lower()}', **extra_params)
-                AppWindow.PRELOADED_BODY_MODELS[f'{body_model.lower()}-{gender.lower()}'] = model
+                if body_model != "SMPL2" and body_model != "SMPL3":
+                    model = eval(body_model.upper())(f'data/body_models/{body_model.lower()}', **extra_params)
+                    print(model)
+                else:
+                    model = eval('SMPL'.upper())(f'data_2/body_models/smpl', **extra_params)
+                    print(model)
+                AppWindow.PRELOADED_BODY_MODELS[f'{body_model.lower()}-{gender.lower()}'] = copy.deepcopy(model)
         logger.info(f'Loaded body models {AppWindow.PRELOADED_BODY_MODELS.keys()}')
 
     # @torch.no_grad()
     def load_body_model(self, body_model='smpl', gender='neutral'):
+        #print(self._scene.scene.camera.get_view_matrix(), self._scene.scene.camera.get_model_matrix(),self._scene.scene.camera.get_projection_matrix(), self._scene.scene.view)
+        #print(body_model, gender)
         self._scene.scene.remove_geometry("__body_model__")
 
         model = AppWindow.PRELOADED_BODY_MODELS[f'{body_model.lower()}-{gender.lower()}']
+
+        AppWindow.POSE_PARAMS["SMPL"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
+        AppWindow.POSE_PARAMS["SMPL"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose"])
+        AppWindow.POSE_PARAMS["SMPL2"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient_fixed"])
+        AppWindow.POSE_PARAMS["SMPL2"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose_fixed"])
 
         input_params = copy.deepcopy(AppWindow.POSE_PARAMS[body_model])
 
         for k, v in input_params.items():
             input_params[k] = v.reshape(1, -1)
 
-        model_output = model(
-            betas=self._body_beta_tensor,
-            expression=self._body_exp_tensor,
-            **input_params,
-        )
+        print("model beta params", self._body_beta_tensor)
+        #print("model", model)
+
+        if body_model == "SMPL":
+            model_output = model(
+                betas=torch.tensor([self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"]]),
+                expression=self._body_exp_tensor,
+                **input_params,
+            )
+        else:
+            model_output = model(
+                betas=self._body_beta_tensor,
+                expression=self._body_exp_tensor,
+                **input_params,
+            )
         verts = model_output.vertices[0].detach().numpy()
         AppWindow.JOINTS = model_output.joints[0].detach().numpy()
+
         faces = model.faces
+        #print("faces", faces)
+
+        if False:
+            default_model = model(**input_params)
+            original_joints = default_model.joints[0]
+            joints_diff = model_output.joints[0] - original_joints
+            #print(joints_diff)
+            verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
+            #print(verts.shape, verts_deltas.shape)
+            #print(verts_deltas)
+            verts = torch.tensor(verts) - verts_deltas
+            verts = verts.detach().numpy()
+
+        if body_model == 'SMPL2':
+            #print('smpl2!!!!')
+            joints_diff = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model_joints"] - model_output.joints[0]
+            AppWindow.JOINTS = (model_output.joints[0] + joints_diff).detach().numpy()
+            verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
+            #print(joints_diff)
+            verts = torch.tensor(verts) + verts_deltas
+            verts = verts.detach().numpy()
+
+        if False:
+            verts = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model"].vertices[0].detach().numpy())
+            AppWindow.JOINTS = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model"].joints[0].detach().numpy())
+
+        #print(verts)
 
         mesh = o3d.geometry.TriangleMesh()
 
         mesh.vertices = o3d.utility.Vector3dVector(verts)
+        #print("mesh vertices", np.asarray(mesh.vertices))
         mesh.triangles = o3d.utility.Vector3iVector(faces)
         mesh.compute_vertex_normals()
         mesh.paint_uniform_color([0.5, 0.5, 0.5])
         # ipdb.set_trace()
         min_y = -mesh.get_min_bound()[1]
-        mesh.translate([0, min_y, 0])
-        AppWindow.JOINTS += np.array([0, min_y, 0])
+        #print("min_y", min_y)
+        #mesh.translate([0, min_y, 0])
+        mesh.translate(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"])
+        AppWindow.JOINTS += np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"])
+        #print(AppWindow.JOINTS)
+        #print("translation", self.smpl_params["translation"])
+        #AppWindow.JOINTS += np.array([0, min_y, 0])
 
         self._scene.scene.add_geometry("__body_model__", mesh,
                                        self.settings.material)
         bounds = mesh.get_axis_aligned_bounding_box()
+        bounds = o3d.geometry.AxisAlignedBoundingBox(np.array([-100,-100,-100]), np.array([100,100,100]))
+        print(bounds)
         if AppWindow.CAM_FIRST:
-            self._scene.setup_camera(60, bounds, bounds.get_center())
+            #print("camera setup")
+            #print(self.smpl_params["camera"])
+            #self._scene.setup_camera(60, bounds, bounds.get_center())
+            #if self.background_img:
+            #    self._scene.scene.set_background([1, 1, 1, 1], self.background_img)
+            self._scene.setup_camera(self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["intrinsic_matrix"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["extrinsic_matrix"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["width"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["height"],
+                                     bounds)
+            #self._scene.setup_camera(10, bounds, bounds.get_center())
             AppWindow.CAM_FIRST = False
-        AppWindow.BODY_TRANSL = torch.tensor([[0, min_y, 0]])
+        #AppWindow.BODY_TRANSL = torch.tensor([[0, min_y, 0]])
+        AppWindow.BODY_TRANSL = copy.deepcopy(torch.tensor(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]))
+        #print(AppWindow.BODY_TRANSL)
         self._on_show_joints(self._show_joints.checked)
 
     def load(self, path):
@@ -1533,7 +1740,12 @@ class AppWindow:
                 self._scene.scene.add_geometry("__model__", geometry,
                                                self.settings.material)
                 bounds = geometry.get_axis_aligned_bounding_box()
-                self._scene.setup_camera(60, bounds, bounds.get_center())
+                self._scene.setup_camera(self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["intrinsic_matrix"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["extrinsic_matrix"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["width"],
+                                     self.item_infos[AppWindow.CUR_ITEM_INDEX]["camera"]["height"],
+                                     bounds)
+                #self._scene.setup_camera(60, bounds, bounds.get_center())
             except Exception as e:
                 print(e)
 
@@ -1549,17 +1761,241 @@ class AppWindow:
 
         self._scene.scene.scene.render_to_image(on_image)
 
+def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
+    keypoints_by_id = {}
+    for dirr in os.listdir(keypoints_fixed_path):
+        if dirr.startswith('.'):
+            print(dirr, "skip..")
+            continue
+
+        for skeleton_file in os.listdir(os.path.join(keypoints_fixed_path, dirr, 'skeletons')):
+            if not skeleton_file.endswith('.xml'):
+                continue
+            if not skeleton_file[:-4] == idd:
+                continue
+            print("skeletoooon")
+            skeleton_parsed = parse_skeleton_xml(os.path.join(keypoints_fixed_path, dirr, 'skeletons', skeleton_file))
+            kps = []
+            for keypoint in skeleton_parsed['skeletons'][0]['keypoints']:
+                kps.append([keypoint['x'], keypoint['y']])
+            keypoints_by_id[skeleton_file[:-4]] = kps
+
+    for dirr in os.listdir(data_path):
+        if dirr.startswith('.'):
+            print(dirr, "skip..")
+            continue
+        print(dirr)
+        for json_file in  os.listdir(os.path.join(data_path, dirr)):
+            if not json_file.endswith('.json'):
+                continue
+            if json_file[:-5] in keypoints_by_id:
+                subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
+                with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
+                    json_data = json.load(fr)
+                json_data['joints2d_fixed'] = keypoints_by_id[json_file[:-5]]
+                with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
+                    json.dump(json_data, fw)
+
+    from smplx import SMPL
+    frame_info = json.load(open(json_path))
+
+    frame_info_parsed = {}
+    frame_info_parsed['json_path'] = json_path
+    frame_info_parsed['img_path'] = img_path
+    frame_info_parsed['id'] = idd
+    frame_info_parsed['background_img'] = o3d.io.read_image(img_path)
+
+    frame_info_parsed['pose_params'] = {'quaternions' : torch.tensor([el['state']['q'] for el in frame_info['poses']])}
+    frame_info_parsed["betas"] = frame_info["betas"]
+    frame_info_parsed["translation"] = frame_info["translation"]
+
+    intrinsic_matrix =  frame_info["camera"]["state"]["intrinsics"]["state"]["intrinsic_matrix"]
+    intrinsic_dist_coefs = frame_info["camera"]["state"]["intrinsics"]["state"]["dist_coeffs"]
+
+    extrinsic_matrix_quaternion = frame_info["camera"]["state"]["extrinsics"]["state"]["rotation"]["state"]["q"]
+    extrinsic_matrix = transforms.quaternion_to_matrix(torch.tensor(extrinsic_matrix_quaternion))
+    extrinsic_matrix_translation = torch.cat([torch.tensor(frame_info["camera"]["state"]["extrinsics"]["state"]["translation"]), torch.tensor([1])])
+    extrinsic_matrix = torch.cat([extrinsic_matrix, torch.zeros(1, 3)])
+    extrinsic_matrix = torch.column_stack([extrinsic_matrix, extrinsic_matrix_translation])
+
+    camera = {"intrinsic_matrix": intrinsic_matrix,
+              "intrinsic_dist_coeffs": intrinsic_dist_coefs,
+              "extrinsic_matrix": extrinsic_matrix,
+              "width": frame_info["img_size"][1],
+              "height": frame_info["img_size"][0]}
+
+    body_pose = torch.zeros(1, 23, 3)
+    global_orient = torch.zeros(1, 1, 3)
+    for ji, pose_param in enumerate(frame_info_parsed['pose_params']["quaternions"]):
+        axis_angle =  transforms.quaternion_to_axis_angle(pose_param)
+        axis_angle_2 = R.Rotation.from_quat(list(pose_param)[1:] + list(pose_param)[:1]).as_rotvec()
+        if ji == 0:
+            global_orient[0, ji] = torch.tensor(axis_angle_2)
+        else:
+            body_pose[0, ji - 1] = torch.tensor(axis_angle_2)
+
+    extra_params = {'gender': 'neutral'}
+    model = SMPL('data/body_models/smpl', **extra_params)
+    input_params = {'global_orient': global_orient, 'body_pose': body_pose}
+    frame_info_parsed['pose_params']["body_pose"] = copy.deepcopy(body_pose)
+    frame_info_parsed['pose_params']["global_orient"] = copy.deepcopy(global_orient)
+    for k, v in input_params.items():
+        input_params[k] = v.reshape(1, -1)
+
+    model_output = model(
+        betas=torch.tensor([frame_info_parsed["betas"]]),
+        expression=torch.zeros(1,10),
+        **input_params,
+    )
+    #print("SMPL model joints")
+    #print(model_output.joints[0])
+
+    #print("translation", frame_info["translation"])
+    #print("Restored joints")
+    target_keypoints = []
+    for i, joint in enumerate(frame_info["joints2d_fixed"]):
+        x = joint[0]
+        y = joint[1]
+
+        z = float(model_output.joints[0][i][2]) + float(frame_info["translation"][2])   
+        f_x = intrinsic_matrix[0][0]
+        f_y = intrinsic_matrix[1][1]
+        c_x = intrinsic_matrix[0][2]
+        c_y = intrinsic_matrix[1][2]
+        print(f_x, f_y, c_x, c_y)
+
+        xx = ((x - c_x) * z) / f_x - float(frame_info["translation"][0])
+        yy = ((y - c_y) * z) / f_y - float(frame_info["translation"][1])
+        z = z - float(frame_info["translation"][2])
+
+        print(xx - float(model_output.joints[0][i][0]), yy - float(model_output.joints[0][i][1]), z - float(model_output.joints[0][i][2]))
+        target_keypoints.append([xx, yy, z])
+
+    #init_pose = copy.deepcopy(AppWindow.POSE_PARAMS[bm][bp])
+
+    target_keypoints = target_keypoints[:24]
+    target_keypoints = torch.from_numpy(np.array(target_keypoints)).float()
+    body_params, global_params = simple_ik_solver(
+        model=model,
+        target=target_keypoints, device='cpu', init=copy.deepcopy(body_pose), global_orient=copy.deepcopy(global_orient),
+        max_iter=50, #transl=torch.tensor([frame_info_parsed["translation"]]),
+        betas=torch.tensor([frame_info_parsed["betas"]]),
+    )
+    body_params = body_params.requires_grad_(False)
+    global_params = global_params.requires_grad_(False)
+    # import ipdb; ipdb.set_trace()
+    new_body_pose = body_params.reshape(1, -1, 3)
+    new_global_orient  = global_params.reshape(1, -1, 3)
+    #print("new pose params")
+    #print(new_body_pose, new_global_orient)
+    #print("old pose params")
+    input_params = {'global_orient': new_global_orient, 'body_pose': new_body_pose}
+    for k, v in input_params.items():
+        input_params[k] = v.reshape(1, -1)
+    model_output_fixed = model(
+        betas=torch.tensor([frame_info_parsed["betas"]]),
+        expression=torch.zeros(1,10),
+        **input_params,
+    )
+    frame_info_parsed["smpl_model_joints"] = model_output_fixed.joints[0]
+    #print(frame_info_parsed['pose_params']["body_pose"], frame_info_parsed['pose_params']["global_orient"])
+    frame_info_parsed['pose_params']["body_pose_fixed"] = copy.deepcopy(new_body_pose)
+    frame_info_parsed['pose_params']["global_orient_fixed"] = copy.deepcopy(new_global_orient)
+    frame_info_parsed['pose_params']["joints_3d_fixed"] = copy.deepcopy(target_keypoints)
+
+
+    frame_info_parsed["smpl_model"] = model_output
+
+    return frame_info_parsed, camera
+
+
+def parse_data_to_label(data_path, keypoints_fixed_path, item_id):
+    #### parse keypoints fixed
+
+    keypoints_by_id = {}
+    for dirr in os.listdir(keypoints_fixed_path):
+        if dirr.startswith('.'):
+            print(dirr, "skip..")
+            continue
+
+        for skeleton_file in os.listdir(os.path.join(keypoints_fixed_path, dirr, 'skeletons')):
+            if not skeleton_file.endswith('.xml'):
+                continue
+            skeleton_parsed = parse_skeleton_xml(os.path.join(keypoints_fixed_path, dirr, 'skeletons', skeleton_file))
+            kps = []
+            for keypoint in skeleton_parsed['skeletons'][0]['keypoints']:
+                kps.append([keypoint['x'], keypoint['y']])
+            keypoints_by_id[skeleton_file[:-4]] = kps
+
+    for dirr in os.listdir(data_path):
+        if dirr.startswith('.'):
+            print(dirr, "skip..")
+            continue
+        print(dirr)
+        for json_file in  os.listdir(os.path.join(data_path, dirr)):
+            if not json_file.endswith('.json'):
+                continue
+            if json_file[:-5] in keypoints_by_id:
+                subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
+                with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
+                    json_data = json.load(fr)
+                json_data['joints2d_fixed'] = keypoints_by_id[json_file[:-5]]
+                with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
+                    json.dump(json_data, fw)
+
+    from smplx import SMPL
+
+    item_infos = []
+    for item_to_label_dir in os.listdir(data_path):
+        if "." in item_to_label_dir:
+            print("Skip strange directory name {}".format(item_to_label_dir))
+            continue
+        if item_to_label_dir != item_id:
+            continue
+
+        item_info = {'id' : item_to_label_dir, 'frames': []}
+        count = 0
+        for el in os.listdir(os.path.join(data_path, item_to_label_dir)):
+            if not el.endswith('.json'):
+                continue
+
+            if not el[:-5] in keypoints_by_id:
+                continue
+
+            count += 1
+            if count > 30:
+                break
+
+            frame_info_parsed, camera = parse_frame_info(os.path.join(data_path, item_to_label_dir, el),
+                                          os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '_with_kp.jpg'),
+                                          el.split('.json')[0],
+                                          keypoints_fixed_path,
+                                          data_path)
+
+            item_info['frames'].append(frame_info_parsed)
+            item_info['camera'] = camera
+
+        item_infos.append(item_info)
+        break
+
+    print(item_infos[0]['frames'])
+    return item_infos
 
 def main(args):
+    logger.add(sys.stderr, format="{time} {level} {message}")
     if args.web:
         logger.info('Initializing web visualization')
         o3d.visualization.webrtc_server.enable_webrtc()
+
+    background_img = None
+    if args.data_path:
+        item_infos = parse_data_to_label(args.data_path, args.keypoints_fixed_path, args.item_id)
 
     # We need to initalize the application, which finds the necessary shaders
     # for rendering and prepares the cross-platform window abstraction.
     gui.Application.instance.initialize()
 
-    w = AppWindow(1920, 1080)
+    w = AppWindow(1200, 900, item_infos, args.labeled_data_path, args.keypoints_fixed_path, args.data_path)
 
     # Run the event loop. This will not return until the last window is closed.
     gui.Application.instance.run()
@@ -1568,6 +2004,10 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--web', action='store_true', help='Enable web visualization')
+    parser.add_argument('--data_path', help='Path to data to label')
+    parser.add_argument('--labeled_data_path', help='Folder to store labeled data')
+    parser.add_argument('--keypoints_fixed_path', help='Folder with fixed keypoints')
+    parser.add_argument('--item_id')
 
     args = parser.parse_args()
     main(args)
