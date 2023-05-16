@@ -46,6 +46,7 @@ import shutil
 import time
 from parse_skeleton import parse_skeleton_xml
 import subprocess
+from smplx import SMPL, SMPLX, MANO, FLAME
 
 from utils import (
     get_checkerboard_plane,
@@ -61,7 +62,8 @@ from utils import (
     SMPLX_NAMES,
     MANO_NAMES,
 )
-from simple_ik import simple_ik_solver
+from simple_ik import simple_ik_solver, make_measurements, measurements_ik_solver
+from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT, ID_BY_MEASUREMENT_NAME
 
 
 isMacOS = (platform.system() == "Darwin")
@@ -250,7 +252,7 @@ class AppWindow:
         Settings.LIT, Settings.UNLIT, Settings.NORMALS, Settings.DEPTH
     ]
 
-    BODY_MODEL_NAMES = ["SMPL","SMPL2", "SMPLX", "MANO", "FLAME"]
+    BODY_MODEL_NAMES = ["SMPL","SMPL2", "SMPL3", "SMPLX", "MANO", "FLAME"]
     BODY_MODEL_GENDERS = {
         'SMPL': ['neutral', 'male', 'female'],
         'SMPL2': ['neutral', 'male', 'female'],
@@ -356,6 +358,8 @@ class AppWindow:
 
     CUR_ITEM_INDEX = 0
     CUR_FRAME_INDEX = 0
+
+    LABELER_BETAS = torch.zeros(1,10)
 
     def __init__(self, width, height, item_infos, labeled_data_path, keypoints_fixed_path, data_path):
         self.item_infos = item_infos
@@ -556,6 +560,9 @@ class AppWindow:
         self._update_keypoints = gui.Button("Update keypoints")
         item_iteration_settings.add_child(self._update_keypoints)
         self._update_keypoints.set_on_clicked(self._on_update_keypoints)
+        self._choose_this_betas = gui.Button("Choose this betas")
+        self._choose_this_betas.set_on_clicked(self._on_choose_this_betas)
+        item_iteration_settings.add_child(self._choose_this_betas)
         self._export_results = gui.Button("Export results")
         item_iteration_settings.add_child(self._export_results)
         self._export_results.set_on_clicked(self._on_export_results)
@@ -630,12 +637,30 @@ class AppWindow:
         self._body_beta_val = gui.Slider(gui.Slider.DOUBLE)
         self._body_beta_val.set_limits(-2, 2.0)
         self._body_beta_tensor = torch.zeros(1, 10)
+        extra_params = {'gender': 'neutral'}
+        model = SMPL('data/body_models/smpl', **extra_params)
+        self._measurements = make_measurements(model, self._body_beta_tensor)
         #print("BETAS", smpl_params["betas"], torch.zeros(1,10), torch.tensor(smpl_params["betas"]))
         #self._body_beta_tensor = copy.deepcopy(torch.tensor([smpl_params["betas"]]))
         self._body_beta_reset = gui.Button("Reset betas")
 
         self._body_beta_text = gui.Label("Betas")
         self._body_beta_text.text = f",".join(f'{x:.1f}'for x in self._body_beta_tensor[0].numpy().tolist())
+
+        print("create gui buttons for measurements")
+        self.measurements = {}
+        for measurement_name in sorted(VERTICES_IDX_BY_MEASUREMENT.keys()):
+            self.measurements[measurement_name] = {'+': gui.Button("+"), '-': gui.Button("-")}
+        print("succesfully created gui buttons for measurements")
+
+#        self._body_chest_val_delta = gui.Slider(gui.Slider.DOUBLE)
+#        self._body_chest_val_delta.set_limits(-0.3, 0.3)
+#        self._body_chest_val_delta_value = 0.
+#        self._body_hip_val_delta = gui.Slider(gui.Slider.DOUBLE)
+#        self._body_hip_val_delta.set_limits(-0.3, 0.3)
+#        self._body_hip_val_delta_value = 0.
+
+        #self._body_measurement_delta_reset = gui.Button("Reset body measurements delta")
 
         # ------- BODY MODEL EXPRESSION SETTINGS ------- #
         self._body_model_exp_comp = gui.Combobox()
@@ -682,6 +707,14 @@ class AppWindow:
         self._body_beta_val.set_on_value_changed(self._on_body_beta_val)
         self._body_beta_reset.set_on_clicked(self._on_body_beta_reset)
         self._body_model_shape_comp.set_on_selection_changed(self._on_body_model_shape_comp)
+        print("setting function")
+        for measurement_name in self.measurements:
+            self.measurements[measurement_name]['+'].set_on_clicked(self._on_change_measurement(measurement_name, '+'))
+            self.measurements[measurement_name]['-'].set_on_clicked(self._on_change_measurement(measurement_name, '-'))
+        print("succesfully set function")
+#        self._body_chest_val_delta.set_on_value_changed(self._on_body_chest_val_delta)
+#        self._body_hip_val_delta.set_on_value_changed(self._on_body_hip_val_delta)
+#        self._body_measurement_delta_reset.set_on_clicked(self._on_body_measurement_delta_reset)
 
         self._body_exp_val.set_on_value_changed(self._on_body_exp_val)
         self._body_exp_reset.set_on_clicked(self._on_body_exp_reset)
@@ -717,6 +750,27 @@ class AppWindow:
         h = gui.Horiz(0.25 * em)  # row 2
         h.add_child(self._body_beta_reset)
         self.model_settings.add_child(h)
+
+        print("setting grid")
+        for measurement_name in self.measurements:
+            h = gui.Horiz(0.25 * em)
+            h.add_child(gui.Label("{}:".format(measurement_name)))
+            h.add_child(self.measurements[measurement_name]['+'])
+            h.add_child(self.measurements[measurement_name]['-'])
+            self.model_settings.add_child(h)
+        print(self.measurements)
+        print(grid)
+
+#        grid.add_child(gui.Label("Chest delta val:"))
+#        grid.add_child(self._body_chest_val_delta)
+#        grid.add_child(gui.Label("Hip delta val:"))
+#        grid.add_child(self._body_hip_val_delta)
+        #self.model_settings.add_child(grid)
+        print("succesfully set grid")
+
+ #       h = gui.Horiz(0.25 * em)  # row 2
+ #       h.add_child(self._body_measurement_delta_reset)
+ #       self.model_settings.add_child(h)
 
         #grid = gui.VGrid(2, 0.25 * em)
         #grid.add_child(gui.Label("Exp Component"))
@@ -1101,11 +1155,66 @@ class AppWindow:
     def _on_body_beta_val(self, val):
         self._body_beta_tensor[0, int(self._body_model_shape_comp.selected_text)-1] = float(val)
         self._body_beta_text.text = f",".join(f'{x:.1f}' for x in self._body_beta_tensor[0].numpy().tolist())
+        extra_params = {'gender': 'neutral'}
+        model = SMPL('data/body_models/smpl', **extra_params)
+        self._measurements = make_measurements(model, self._body_beta_tensor)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
         )
         # self._on_show_joints(self._show_joints.checked)
+
+    def _on_change_measurement(self, measurement_name, val):
+        def find_optim_betas():
+            print(measurement_name, val)
+            target_measurements = copy.deepcopy(self._measurements.detach())
+            print("Current measurements are: {}".format(self._measurements))
+            if val == '+':
+                target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.1
+                print("increased")
+            else:
+                target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.9
+                print("decreased")
+
+            extra_params = {'gender': 'neutral'}
+            model = SMPL('data/body_models/smpl', **extra_params)
+            optim_betas = measurements_ik_solver(model, target_measurements, self._body_beta_tensor)
+            self._body_beta_tensor = optim_betas
+            self._measurements = make_measurements(model, self._body_beta_tensor)
+            print(self._body_beta_tensor)
+            print("New measurements are: {}".format(self._measurements))
+            self.load_body_model(
+                self._body_model.selected_text,
+                gender=self._body_model_gender.selected_text,
+            )
+
+        return find_optim_betas
+
+    def _on_body_ankle_plus(self):
+        pass
+    def _on_body_ankle_minus(self):
+        pass
+    def _on_body_chest_val_delta(self, val):
+        self._body_chest_val_delta_value = float(val)
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
+    def _on_body_hip_val_delta(self, val):
+        self._body_hip_val_delta_value = float(val)
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
+    def _on_body_measurement_delta_reset(self):
+        self._body_chest_val_delta_value = 0
+        self._body_hip_val_delta_value = 0
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
 
     def _on_body_exp_val(self, val):
         self._body_exp_tensor[0, int(self._body_model_exp_comp.selected_text)-1] = float(val)
@@ -1178,6 +1287,9 @@ class AppWindow:
         self._body_beta_tensor = torch.zeros(1, 10)
         self._body_beta_text.text = f",".join(f'{x:.1f}' for x in self._body_beta_tensor[0].numpy().tolist())
         self._body_beta_val.double_value = 0.0
+        extra_params = {'gender': 'neutral'}
+        model = SMPL('data/body_models/smpl', **extra_params)
+        self._measurements = make_measurements(model, self._body_beta_tensor)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1522,6 +1634,16 @@ class AppWindow:
             gender=self._body_model_gender.selected_text,
         )
 
+    def _on_choose_this_betas(self):
+        self._body_beta_tensor = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas'])
+        extra_params = {'gender': 'neutral'}
+        model = SMPL('data/body_models/smpl', **extra_params)
+        self._measurements = make_measurements(model, self._body_beta_tensor)
+        self.load_body_model(
+            self._body_model.selected_text,
+            gender=self._body_model_gender.selected_text,
+        )
+
     def _on_update_keypoints(self):
         cur_frame_info = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]
         self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'], self.keypoints_fixed_path, self.data_path)
@@ -1568,8 +1690,6 @@ class AppWindow:
             self._scene.scene.add_geometry(f"__ground_{idx:04d}__", g, self.settings._materials[Settings.LIT])
 
     def preload_body_models(self):
-        from smplx import SMPL, SMPLX, MANO, FLAME
-
         for body_model in AppWindow.BODY_MODEL_NAMES:
             for gender in AppWindow.BODY_MODEL_GENDERS[body_model]:
                 logger.info(f'Loading {body_model}-{gender}')
@@ -1581,14 +1701,18 @@ class AppWindow:
                 if body_model != "SMPL2" and body_model != "SMPL3":
                     model = eval(body_model.upper())(f'data/body_models/{body_model.lower()}', **extra_params)
                     print(model)
-                else:
-                    model = eval('SMPL'.upper())(f'data_2/body_models/smpl', **extra_params)
+                elif body_model == "SMPL2":
+                    model = eval('SMPL'.upper())(f'data/body_models/smpl', **extra_params)
+                    print(model)
+                elif body_model == "SMPL3":
+                    model = eval('SMPL'.upper())(f'data/body_models/smpl', **extra_params)
                     print(model)
                 AppWindow.PRELOADED_BODY_MODELS[f'{body_model.lower()}-{gender.lower()}'] = copy.deepcopy(model)
         logger.info(f'Loaded body models {AppWindow.PRELOADED_BODY_MODELS.keys()}')
 
     # @torch.no_grad()
     def load_body_model(self, body_model='smpl', gender='neutral'):
+        print("o")
         #print(self._scene.scene.camera.get_view_matrix(), self._scene.scene.camera.get_model_matrix(),self._scene.scene.camera.get_projection_matrix(), self._scene.scene.view)
         #print(body_model, gender)
         self._scene.scene.remove_geometry("__body_model__")
@@ -1597,10 +1721,15 @@ class AppWindow:
 
         AppWindow.POSE_PARAMS["SMPL"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
         AppWindow.POSE_PARAMS["SMPL"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose"])
-        AppWindow.POSE_PARAMS["SMPL2"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient_fixed"])
-        AppWindow.POSE_PARAMS["SMPL2"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose_fixed"])
+        AppWindow.POSE_PARAMS["SMPL2"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
+        AppWindow.POSE_PARAMS["SMPL2"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose"])
+        AppWindow.POSE_PARAMS["SMPL3"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
+        AppWindow.POSE_PARAMS["SMPL3"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose"])
+
 
         input_params = copy.deepcopy(AppWindow.POSE_PARAMS[body_model])
+
+        print("ok")
 
         for k, v in input_params.items():
             input_params[k] = v.reshape(1, -1)
@@ -1610,7 +1739,7 @@ class AppWindow:
 
         if body_model == "SMPL":
             model_output = model(
-                betas=torch.tensor([self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"]]),
+                betas=self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"],
                 expression=self._body_exp_tensor,
                 **input_params,
             )
@@ -1626,6 +1755,7 @@ class AppWindow:
         faces = model.faces
         #print("faces", faces)
 
+        print("okok")
         if False:
             default_model = model(**input_params)
             original_joints = default_model.joints[0]
@@ -1639,12 +1769,37 @@ class AppWindow:
 
         if body_model == 'SMPL2':
             #print('smpl2!!!!')
-            joints_diff = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model_joints"] - model_output.joints[0]
-            AppWindow.JOINTS = (model_output.joints[0] + joints_diff).detach().numpy()
-            verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
+            #joints_diff = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model_joints"] - model_output.joints[0]
+            #AppWindow.JOINTS = (model_output.joints[0] + joints_diff).detach().numpy()
+            #verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
             #print(joints_diff)
-            verts = torch.tensor(verts) + verts_deltas
-            verts = verts.detach().numpy()
+            #verts = torch.tensor(verts) + verts_deltas
+            #verts = verts.detach().numpy()
+            pass
+
+        if body_model == 'SMPL3':
+            target = {
+                "chest": self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["measurement"]["chest"] + self._body_chest_val_delta_value,
+                "hip": self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["measurement"]["hip"] + self._body_hip_val_delta_value
+            }
+
+            optimized_betas = measurements_ik_solver(model, target, torch.tensor([self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"]]))
+            optimized_model = model(betas=optimized_betas, expression=self._body_exp_tensor, **input_params)
+
+            print("Old betas")
+            print(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"])
+            print("New betas")
+            print(optimized_betas)
+            print("Old measurement:")
+            print(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["measurement"])
+            print("New measurement:")
+            print(make_measurements(model, optimized_betas))
+            print("Target was:")
+            print(target)
+           
+            verts = optimized_model.vertices[0].detach().numpy()
+            AppWindow.JOINTS = model_output.joints[0].detach().numpy()
+
 
         if False:
             verts = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model"].vertices[0].detach().numpy())
@@ -1691,6 +1846,7 @@ class AppWindow:
         AppWindow.BODY_TRANSL = copy.deepcopy(torch.tensor(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]))
         #print(AppWindow.BODY_TRANSL)
         self._on_show_joints(self._show_joints.checked)
+        print("final ok")
 
     def load(self, path):
         # self._scene.scene.clear_geometry()
@@ -1796,7 +1952,6 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
                 with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
                     json.dump(json_data, fw)
 
-    from smplx import SMPL
     frame_info = json.load(open(json_path))
 
     frame_info_parsed = {}
@@ -1806,7 +1961,8 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
     frame_info_parsed['background_img'] = o3d.io.read_image(img_path)
 
     frame_info_parsed['pose_params'] = {'quaternions' : torch.tensor([el['state']['q'] for el in frame_info['poses']])}
-    frame_info_parsed["betas"] = frame_info["betas"]
+    frame_info_parsed["betas"] = torch.tensor([frame_info["betas"]])
+    print(frame_info_parsed["betas"])
     frame_info_parsed["translation"] = frame_info["translation"]
 
     intrinsic_matrix =  frame_info["camera"]["state"]["intrinsics"]["state"]["intrinsic_matrix"]
@@ -1843,10 +1999,12 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
         input_params[k] = v.reshape(1, -1)
 
     model_output = model(
-        betas=torch.tensor([frame_info_parsed["betas"]]),
+        betas=frame_info_parsed["betas"],
         expression=torch.zeros(1,10),
         **input_params,
     )
+
+    frame_info_parsed['measurement'] = make_measurements(model, frame_info_parsed["betas"])
     #print("SMPL model joints")
     #print(model_output.joints[0])
 
@@ -1879,7 +2037,7 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
         model=model,
         target=target_keypoints, device='cpu', init=copy.deepcopy(body_pose), global_orient=copy.deepcopy(global_orient),
         max_iter=50, #transl=torch.tensor([frame_info_parsed["translation"]]),
-        betas=torch.tensor([frame_info_parsed["betas"]]),
+        betas=frame_info_parsed["betas"],
     )
     body_params = body_params.requires_grad_(False)
     global_params = global_params.requires_grad_(False)
@@ -1893,7 +2051,7 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
     for k, v in input_params.items():
         input_params[k] = v.reshape(1, -1)
     model_output_fixed = model(
-        betas=torch.tensor([frame_info_parsed["betas"]]),
+        betas=frame_info_parsed["betas"],
         expression=torch.zeros(1,10),
         **input_params,
     )
@@ -1942,8 +2100,6 @@ def parse_data_to_label(data_path, keypoints_fixed_path, item_id):
                 json_data['joints2d_fixed'] = keypoints_by_id[json_file[:-5]]
                 with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
                     json.dump(json_data, fw)
-
-    from smplx import SMPL
 
     item_infos = []
     for item_to_label_dir in os.listdir(data_path):
