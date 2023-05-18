@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from smplx import SMPL
 from loguru import logger
-from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT
+from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT, MEASUREMENT_NAMES
 import copy
 
 def timeit(func):
@@ -24,9 +24,9 @@ def make_measurements(model, betas):
     model_output = model(betas=betas,body_pose=pose_params)
     vertices = model_output.vertices[0]
     
-    measurements = torch.zeros(len(sorted(VERTICES_IDX_BY_MEASUREMENT.keys())))
+    measurements = torch.zeros(len(MEASUREMENT_NAMES))
     
-    for i, measurement_name in enumerate(sorted(VERTICES_IDX_BY_MEASUREMENT.keys())):
+    for i, measurement_name in enumerate(MEASUREMENT_NAMES):
         #print(measurement_name)
         for path in VERTICES_IDX_BY_MEASUREMENT[measurement_name][:1]:
             path_length = torch.zeros(1)
@@ -54,6 +54,7 @@ def make_measurements(model, betas):
 @timeit
 def measurements_ik_solver(model, target, init_betas, device='cpu', max_iter=20,
                                mse_threshold=1e-8):
+    print("init betas are: {}".format(init_betas))
     optim_betas = copy.deepcopy(init_betas)
     optim_betas = optim_betas.reshape(-1).unsqueeze(0).to(device)
     optim_betas = optim_betas.requires_grad_(True)
@@ -62,22 +63,22 @@ def measurements_ik_solver(model, target, init_betas, device='cpu', max_iter=20,
     last_mse = 0
     
     default_measurements = make_measurements(model, torch.zeros(1,10))
+    current_measurements = make_measurements(model, init_betas)
 
     for i in range(max_iter):
-        print("measurements", torch.mean(torch.square((make_measurements(model, optim_betas) - target) / default_measurements)))
+        print("measurements", torch.mean(torch.square((make_measurements(model, optim_betas) - target) / current_measurements)))
         print("betas", torch.mean(torch.square(optim_betas - init_betas)))
         mse = torch.mean(torch.square((make_measurements(model, optim_betas) - target) / default_measurements)) + 0.01 * torch.mean(torch.square(optim_betas - init_betas))
         print(mse)
         if abs(mse - last_mse) < mse_threshold:
-            return optim_betas
+            return copy.deepcopy(torch.tensor(optim_betas.detach().numpy()))
         optimizer.zero_grad()
         mse.backward(retain_graph=True)
         optimizer.step()
         last_mse = mse
 
     print(f'IK final loss {last_mse.item():.3f}')
-    return optim_betas.detach()
-
+    return copy.deepcopy(torch.tensor(optim_betas.detach().numpy()))
 @timeit
 def simple_ik_solver(model, target, init=None, global_orient=None, device='cpu', max_iter=20,
                      mse_threshold=1e-8, transl=torch.zeros(1, 3), betas=None):

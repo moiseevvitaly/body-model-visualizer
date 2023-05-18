@@ -63,7 +63,7 @@ from utils import (
     MANO_NAMES,
 )
 from simple_ik import simple_ik_solver, make_measurements, measurements_ik_solver
-from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT, ID_BY_MEASUREMENT_NAME
+from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT, ID_BY_MEASUREMENT_NAME, MEASUREMENT_NAMES
 
 
 isMacOS = (platform.system() == "Darwin")
@@ -640,6 +640,7 @@ class AppWindow:
         extra_params = {'gender': 'neutral'}
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
+        self._target_measurements = copy.deepcopy(self._measurements.detach())
         #print("BETAS", smpl_params["betas"], torch.zeros(1,10), torch.tensor(smpl_params["betas"]))
         #self._body_beta_tensor = copy.deepcopy(torch.tensor([smpl_params["betas"]]))
         self._body_beta_reset = gui.Button("Reset betas")
@@ -649,8 +650,8 @@ class AppWindow:
 
         print("create gui buttons for measurements")
         self.measurements = {}
-        for measurement_name in sorted(VERTICES_IDX_BY_MEASUREMENT.keys()):
-            self.measurements[measurement_name] = {'+': gui.Button("+"), '-': gui.Button("-")}
+        for measurement_name in MEASUREMENT_NAMES:
+            self.measurements[measurement_name] = {'-': gui.Button("-"), '+': gui.Button("+")}
         print("succesfully created gui buttons for measurements")
 
 #        self._body_chest_val_delta = gui.Slider(gui.Slider.DOUBLE)
@@ -1158,6 +1159,7 @@ class AppWindow:
         extra_params = {'gender': 'neutral'}
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
+        self._target_measurements = copy.deepcopy(self._measurements.detach())
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1167,18 +1169,18 @@ class AppWindow:
     def _on_change_measurement(self, measurement_name, val):
         def find_optim_betas():
             print(measurement_name, val)
-            target_measurements = copy.deepcopy(self._measurements.detach())
             print("Current measurements are: {}".format(self._measurements))
+            print("Current target measurements are: {}".format(self._target_measurements))
             if val == '+':
-                target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.1
+                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.1
                 print("increased")
             else:
-                target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.9
+                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.9
                 print("decreased")
 
             extra_params = {'gender': 'neutral'}
             model = SMPL('data/body_models/smpl', **extra_params)
-            optim_betas = measurements_ik_solver(model, target_measurements, self._body_beta_tensor)
+            optim_betas = measurements_ik_solver(model, self._target_measurements, self._body_beta_tensor)
             self._body_beta_tensor = optim_betas
             self._measurements = make_measurements(model, self._body_beta_tensor)
             print(self._body_beta_tensor)
@@ -1290,6 +1292,7 @@ class AppWindow:
         extra_params = {'gender': 'neutral'}
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
+        self._target_measurements = copy.deepcopy(self._measurements.detach())
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1639,6 +1642,7 @@ class AppWindow:
         extra_params = {'gender': 'neutral'}
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
+        self._target_measurements = copy.deepcopy(self._measurements.detach())
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
