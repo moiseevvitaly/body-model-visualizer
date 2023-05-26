@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from smplx import SMPL
 from loguru import logger
-from measurement import VERTICES_IDX_BY_MEASUREMENT, POINTS_VARS_BY_MEASUREMENT, MEASUREMENT_NAMES
+from measurement import VERTICES_IDX_BY_MEASUREMENT, MEASUREMENT_NAMES, ID_BY_MEASUREMENT_NAME
 import copy
 
 def timeit(func):
@@ -23,20 +23,26 @@ def make_measurements(model, betas):
     pose_params[0][50] = -5.6
     model_output = model(betas=betas,body_pose=pose_params)
     vertices = model_output.vertices[0]
-    
+
     measurements = torch.zeros(len(MEASUREMENT_NAMES))
     
     for i, measurement_name in enumerate(MEASUREMENT_NAMES):
+        if i == len(MEASUREMENT_NAMES) - 1:
+            break
+        #print(measurement_name)
         #print(measurement_name)
         for path in VERTICES_IDX_BY_MEASUREMENT[measurement_name][:1]:
             path_length = torch.zeros(1)
             for j in range(len(path)):
-                #print(path[j])
-                path_length += torch.sum(torch.square(vertices[path[j]] - vertices[path[j-1]]))
+                #print(path[j], torch.sum(torch.square(vertices[path[j]] - vertices[path[j-1]])))
+                path_length += torch.sqrt(torch.sum(torch.square(vertices[path[j]] - vertices[path[j-1]])))
             #print(path_length)
-            measurements[i] += torch.sqrt(path_length)[0]
+            measurements[i] += path_length[0]
+            #print(torch.sqrt(path_length))
         #measurements[i] /= len(VERTICES_IDX_BY_MEASUREMENT[measurement_name])
     
+    #measurements[ID_BY_MEASUREMENT_NAME['bust_circle']] -= measurements[ID_BY_MEASUREMENT_NAME['underbust_circle']]
+    measurements[ID_BY_MEASUREMENT_NAME['height']] += model_output.vertices[0][411][1] - model_output.vertices[0][6677][1]
     return measurements
 
 
@@ -52,33 +58,43 @@ def make_measurements(model, betas):
 #- генерим модель с найденными бетами и в исходной позе
 
 @timeit
-def measurements_ik_solver(model, target, init_betas, device='cpu', max_iter=20,
-                               mse_threshold=1e-8):
+def measurements_ik_solver(model, target, init_betas, device='cpu', max_iter=1000,
+                               mse_threshold=1e-7):
     print("init betas are: {}".format(init_betas))
     optim_betas = copy.deepcopy(init_betas)
     optim_betas = optim_betas.reshape(-1).unsqueeze(0).to(device)
     optim_betas = optim_betas.requires_grad_(True)
 
-    optimizer = torch.optim.Adam([optim_betas], lr=0.1)
+
+    #### поиграться с lr
+    optimizer = torch.optim.Adam([optim_betas], lr=0.01)
     last_mse = 0
-    
+
     default_measurements = make_measurements(model, torch.zeros(1,10))
     current_measurements = make_measurements(model, init_betas)
 
     for i in range(max_iter):
-        print("measurements", torch.mean(torch.square((make_measurements(model, optim_betas) - target) / current_measurements)))
-        print("betas", torch.mean(torch.square(optim_betas - init_betas)))
-        mse = torch.mean(torch.square((make_measurements(model, optim_betas) - target) / default_measurements)) + 0.01 * torch.mean(torch.square(optim_betas - init_betas))
-        print(mse)
+        #print("measurements", torch.mean(torch.square((make_measurements(model, optim_betas) - target) / current_measurements)))
+        #print("betas", torch.mean(torch.square(optim_betas - init_betas)))
+        mse = torch.mean(torch.square((make_measurements(model, optim_betas) - target))) #+ 0.00001 * torch.sum(torch.square(optim_betas))
         if abs(mse - last_mse) < mse_threshold:
-            return copy.deepcopy(torch.tensor(optim_betas.detach().numpy()))
+            print("early stop")
+            break
         optimizer.zero_grad()
         mse.backward(retain_graph=True)
         optimizer.step()
         last_mse = mse
 
-    print(f'IK final loss {last_mse.item():.3f}')
-    return copy.deepcopy(torch.tensor(optim_betas.detach().numpy()))
+    print(f'IK final loss {last_mse}')
+
+    pose_params = torch.zeros(1,69)
+    pose_params[0][47] = 5.6
+    pose_params[0][50] = -5.6
+    print("init params:", init_betas, model(betas=init_betas,body_pose=pose_params).joints[0][11])
+    print("optim params:", optim_betas, model(betas=optim_betas,body_pose=pose_params).joints[0][11])
+    joints_diff = model(betas=init_betas,body_pose=pose_params).joints[0][11] - model(betas=optim_betas,body_pose=pose_params).joints[0][11]
+    translation = joints_diff.detach().numpy()
+    return copy.deepcopy(torch.tensor(optim_betas.detach().numpy())), copy.deepcopy(translation)
 @timeit
 def simple_ik_solver(model, target, init=None, global_orient=None, device='cpu', max_iter=20,
                      mse_threshold=1e-8, transl=torch.zeros(1, 3), betas=None):

@@ -641,6 +641,7 @@ class AppWindow:
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
         self._target_measurements = copy.deepcopy(self._measurements.detach())
+        self._additional_translation = np.zeros(3)
         #print("BETAS", smpl_params["betas"], torch.zeros(1,10), torch.tensor(smpl_params["betas"]))
         #self._body_beta_tensor = copy.deepcopy(torch.tensor([smpl_params["betas"]]))
         self._body_beta_reset = gui.Button("Reset betas")
@@ -1160,6 +1161,7 @@ class AppWindow:
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
         self._target_measurements = copy.deepcopy(self._measurements.detach())
+        self._additional_translation = np.zeros(3)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1172,19 +1174,22 @@ class AppWindow:
             print("Current measurements are: {}".format(self._measurements))
             print("Current target measurements are: {}".format(self._target_measurements))
             if val == '+':
-                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.1
+                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.05
                 print("increased")
             else:
-                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.9
+                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.95
                 print("decreased")
 
             extra_params = {'gender': 'neutral'}
             model = SMPL('data/body_models/smpl', **extra_params)
-            optim_betas = measurements_ik_solver(model, self._target_measurements, self._body_beta_tensor)
+            optim_betas, translation = measurements_ik_solver(model, self._target_measurements, self._body_beta_tensor)
             self._body_beta_tensor = optim_betas
             self._measurements = make_measurements(model, self._body_beta_tensor)
+            self._target_measurements = copy.deepcopy(self._measurements.detach())
+            self._additional_translation = translation
             print(self._body_beta_tensor)
             print("New measurements are: {}".format(self._measurements))
+            print("Translation is: {}", self._additional_translation)
             self.load_body_model(
                 self._body_model.selected_text,
                 gender=self._body_model_gender.selected_text,
@@ -1293,6 +1298,7 @@ class AppWindow:
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
         self._target_measurements = copy.deepcopy(self._measurements.detach())
+        self._additional_translation = np.zeros(3)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1643,6 +1649,7 @@ class AppWindow:
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
         self._target_measurements = copy.deepcopy(self._measurements.detach())
+        self._additional_translation = np.zeros(3)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1723,6 +1730,9 @@ class AppWindow:
 
         model = AppWindow.PRELOADED_BODY_MODELS[f'{body_model.lower()}-{gender.lower()}']
 
+        pose_params = torch.zeros(1,69)
+        pose_params[0][47] = 5.6
+        pose_params[0][50] = -5.6
         AppWindow.POSE_PARAMS["SMPL"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
         AppWindow.POSE_PARAMS["SMPL"]["body_pose"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["body_pose"])
         AppWindow.POSE_PARAMS["SMPL2"]["global_orient"] = copy.deepcopy(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["pose_params"]["global_orient"])
@@ -1732,11 +1742,14 @@ class AppWindow:
 
 
         input_params = copy.deepcopy(AppWindow.POSE_PARAMS[body_model])
+        #input_params['body_pose'] = pose_params
 
         print("ok")
 
         for k, v in input_params.items():
             input_params[k] = v.reshape(1, -1)
+
+        print(input_params)
 
         print("model beta params", self._body_beta_tensor)
         #print("model", model)
@@ -1771,15 +1784,21 @@ class AppWindow:
             verts = torch.tensor(verts) - verts_deltas
             verts = verts.detach().numpy()
 
+        additional_translation = np.zeros(3)
         if body_model == 'SMPL2':
+            original_model_output = model(
+                betas=self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["betas"],
+                expression=self._body_exp_tensor,
+                **input_params,
+            )
             #print('smpl2!!!!')
-            #joints_diff = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["smpl_model_joints"] - model_output.joints[0]
+            foot_joint_diff = original_model_output.joints[0][11] - model_output.joints[0][11]
+            print("foot joint diff is", foot_joint_diff)
             #AppWindow.JOINTS = (model_output.joints[0] + joints_diff).detach().numpy()
             #verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
             #print(joints_diff)
-            #verts = torch.tensor(verts) + verts_deltas
-            #verts = verts.detach().numpy()
-            pass
+            verts = torch.tensor(verts) + foot_joint_diff
+            verts = verts.detach().numpy()
 
         if body_model == 'SMPL3':
             target = {
@@ -1819,11 +1838,13 @@ class AppWindow:
         mesh.compute_vertex_normals()
         mesh.paint_uniform_color([0.5, 0.5, 0.5])
         # ipdb.set_trace()
-        min_y = -mesh.get_min_bound()[1]
+        #min_y = -mesh.get_min_bound()[1]
         #print("min_y", min_y)
         #mesh.translate([0, min_y, 0])
-        mesh.translate(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"])
-        AppWindow.JOINTS += np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"])
+        print(np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]), additional_translation)
+        print(model_output.joints[0][11])
+        mesh.translate(np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + additional_translation)
+        AppWindow.JOINTS += np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + additional_translation
         #print(AppWindow.JOINTS)
         #print("translation", self.smpl_params["translation"])
         #AppWindow.JOINTS += np.array([0, min_y, 0])
@@ -1847,7 +1868,7 @@ class AppWindow:
             #self._scene.setup_camera(10, bounds, bounds.get_center())
             AppWindow.CAM_FIRST = False
         #AppWindow.BODY_TRANSL = torch.tensor([[0, min_y, 0]])
-        AppWindow.BODY_TRANSL = copy.deepcopy(torch.tensor(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]))
+        AppWindow.BODY_TRANSL = copy.deepcopy(torch.tensor(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + torch.tensor(additional_translation))
         #print(AppWindow.BODY_TRANSL)
         self._on_show_joints(self._show_joints.checked)
         print("final ok")
