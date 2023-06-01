@@ -361,10 +361,9 @@ class AppWindow:
 
     LABELER_BETAS = torch.zeros(1,10)
 
-    def __init__(self, width, height, item_infos, labeled_data_path, keypoints_fixed_path, data_path):
+    def __init__(self, width, height, item_infos, labeled_data_path, data_path):
         self.item_infos = item_infos
         self.labeled_data_path = labeled_data_path
-        self.keypoints_fixed_path = keypoints_fixed_path
         self.data_path = data_path
 
         #print("app window pose params smpl", AppWindow.POSE_PARAMS["SMPL"])
@@ -1171,14 +1170,18 @@ class AppWindow:
     def _on_change_measurement(self, measurement_name, val):
         def find_optim_betas():
             print(measurement_name, val)
-            print("Current measurements are: {}".format(self._measurements))
-            print("Current target measurements are: {}".format(self._target_measurements))
+            print("Current measurements are:")
+            for name in MEASUREMENT_NAMES:
+                print(name, self._measurements[ID_BY_MEASUREMENT_NAME[name]])
             if val == '+':
                 self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.05
                 print("increased")
             else:
                 self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.95
                 print("decreased")
+            print("Current target measurements are:")
+            for name in MEASUREMENT_NAMES:
+                print(name, self._target_measurements[ID_BY_MEASUREMENT_NAME[name]])
 
             extra_params = {'gender': 'neutral'}
             model = SMPL('data/body_models/smpl', **extra_params)
@@ -1188,8 +1191,11 @@ class AppWindow:
             self._target_measurements = copy.deepcopy(self._measurements.detach())
             self._additional_translation = translation
             print(self._body_beta_tensor)
-            print("New measurements are: {}".format(self._measurements))
-            print("Translation is: {}", self._additional_translation)
+            print("New measurements are:")
+            for name in MEASUREMENT_NAMES:
+                print(name, self._measurements[ID_BY_MEASUREMENT_NAME[name]])
+            
+            #print("Translation is: {}", self._additional_translation)
             self.load_body_model(
                 self._body_model.selected_text,
                 gender=self._body_model_gender.selected_text,
@@ -1657,7 +1663,7 @@ class AppWindow:
 
     def _on_update_keypoints(self):
         cur_frame_info = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]
-        self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'], self.keypoints_fixed_path, self.data_path)
+        self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'], self.data_path)
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
@@ -1749,7 +1755,7 @@ class AppWindow:
         for k, v in input_params.items():
             input_params[k] = v.reshape(1, -1)
 
-        print(input_params)
+        #print(input_params)
 
         print("model beta params", self._body_beta_tensor)
         #print("model", model)
@@ -1793,7 +1799,7 @@ class AppWindow:
             )
             #print('smpl2!!!!')
             foot_joint_diff = original_model_output.joints[0][11] - model_output.joints[0][11]
-            print("foot joint diff is", foot_joint_diff)
+            #print("foot joint diff is", foot_joint_diff)
             #AppWindow.JOINTS = (model_output.joints[0] + joints_diff).detach().numpy()
             #verts_deltas = torch.einsum('ij,jk->ik', model.lbs_weights, joints_diff[:24])
             #print(joints_diff)
@@ -1841,8 +1847,8 @@ class AppWindow:
         #min_y = -mesh.get_min_bound()[1]
         #print("min_y", min_y)
         #mesh.translate([0, min_y, 0])
-        print(np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]), additional_translation)
-        print(model_output.joints[0][11])
+        #print(np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]), additional_translation)
+        #print(model_output.joints[0][11])
         mesh.translate(np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + additional_translation)
         AppWindow.JOINTS += np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + additional_translation
         #print(AppWindow.JOINTS)
@@ -1853,7 +1859,7 @@ class AppWindow:
                                        self.settings.material)
         bounds = mesh.get_axis_aligned_bounding_box()
         bounds = o3d.geometry.AxisAlignedBoundingBox(np.array([-100,-100,-100]), np.array([100,100,100]))
-        print(bounds)
+        #print(bounds)
         if AppWindow.CAM_FIRST:
             #print("camera setup")
             #print(self.smpl_params["camera"])
@@ -1942,38 +1948,19 @@ class AppWindow:
 
         self._scene.scene.scene.render_to_image(on_image)
 
-def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
-    keypoints_by_id = {}
-    for dirr in os.listdir(keypoints_fixed_path):
-        if dirr.startswith('.'):
-            print(dirr, "skip..")
-            continue
-
-        for skeleton_file in os.listdir(os.path.join(keypoints_fixed_path, dirr, 'skeletons')):
-            if not skeleton_file.endswith('.xml'):
+def parse_frame_info(json_path, img_path, idd, data_path):
+    if False:
+        for dirr in os.listdir(data_path):
+            if dirr.startswith('.'):
+                print(dirr, "skip..")
                 continue
-            if not skeleton_file[:-4] == idd:
-                continue
-            print("skeletoooon")
-            skeleton_parsed = parse_skeleton_xml(os.path.join(keypoints_fixed_path, dirr, 'skeletons', skeleton_file))
-            kps = []
-            for keypoint in skeleton_parsed['skeletons'][0]['keypoints']:
-                kps.append([keypoint['x'], keypoint['y']])
-            keypoints_by_id[skeleton_file[:-4]] = kps
-
-    for dirr in os.listdir(data_path):
-        if dirr.startswith('.'):
-            print(dirr, "skip..")
-            continue
-        print(dirr)
-        for json_file in  os.listdir(os.path.join(data_path, dirr)):
-            if not json_file.endswith('.json'):
-                continue
-            if json_file[:-5] in keypoints_by_id:
+            print(dirr)
+            for json_file in  os.listdir(os.path.join(data_path, dirr)):
+                if not json_file.endswith('.json'):
+                    continue
                 subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
                 with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
                     json_data = json.load(fr)
-                json_data['joints2d_fixed'] = keypoints_by_id[json_file[:-5]]
                 with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
                     json.dump(json_data, fw)
 
@@ -2036,7 +2023,7 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
     #print("translation", frame_info["translation"])
     #print("Restored joints")
     target_keypoints = []
-    for i, joint in enumerate(frame_info["joints2d_fixed"]):
+    for i, joint in enumerate(frame_info["joints2d"]):
         x = joint[0]
         y = joint[1]
 
@@ -2056,35 +2043,36 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
 
     #init_pose = copy.deepcopy(AppWindow.POSE_PARAMS[bm][bp])
 
-    target_keypoints = target_keypoints[:24]
-    target_keypoints = torch.from_numpy(np.array(target_keypoints)).float()
-    body_params, global_params = simple_ik_solver(
-        model=model,
-        target=target_keypoints, device='cpu', init=copy.deepcopy(body_pose), global_orient=copy.deepcopy(global_orient),
-        max_iter=50, #transl=torch.tensor([frame_info_parsed["translation"]]),
-        betas=frame_info_parsed["betas"],
-    )
-    body_params = body_params.requires_grad_(False)
-    global_params = global_params.requires_grad_(False)
-    # import ipdb; ipdb.set_trace()
-    new_body_pose = body_params.reshape(1, -1, 3)
-    new_global_orient  = global_params.reshape(1, -1, 3)
-    #print("new pose params")
-    #print(new_body_pose, new_global_orient)
-    #print("old pose params")
-    input_params = {'global_orient': new_global_orient, 'body_pose': new_body_pose}
-    for k, v in input_params.items():
-        input_params[k] = v.reshape(1, -1)
-    model_output_fixed = model(
-        betas=frame_info_parsed["betas"],
-        expression=torch.zeros(1,10),
-        **input_params,
-    )
-    frame_info_parsed["smpl_model_joints"] = model_output_fixed.joints[0]
-    #print(frame_info_parsed['pose_params']["body_pose"], frame_info_parsed['pose_params']["global_orient"])
-    frame_info_parsed['pose_params']["body_pose_fixed"] = copy.deepcopy(new_body_pose)
-    frame_info_parsed['pose_params']["global_orient_fixed"] = copy.deepcopy(new_global_orient)
-    frame_info_parsed['pose_params']["joints_3d_fixed"] = copy.deepcopy(target_keypoints)
+    if False:
+        target_keypoints = target_keypoints[:24]
+        target_keypoints = torch.from_numpy(np.array(target_keypoints)).float()
+        body_params, global_params = simple_ik_solver(
+            model=model,
+            target=target_keypoints, device='cpu', init=copy.deepcopy(body_pose), global_orient=copy.deepcopy(global_orient),
+            max_iter=50, #transl=torch.tensor([frame_info_parsed["translation"]]),
+            betas=frame_info_parsed["betas"],
+        )
+        body_params = body_params.requires_grad_(False)
+        global_params = global_params.requires_grad_(False)
+        # import ipdb; ipdb.set_trace()
+        new_body_pose = body_params.reshape(1, -1, 3)
+        new_global_orient  = global_params.reshape(1, -1, 3)
+        #print("new pose params")
+        #print(new_body_pose, new_global_orient)
+        #print("old pose params")
+        input_params = {'global_orient': new_global_orient, 'body_pose': new_body_pose}
+        for k, v in input_params.items():
+            input_params[k] = v.reshape(1, -1)
+        model_output_fixed = model(
+            betas=frame_info_parsed["betas"],
+            expression=torch.zeros(1,10),
+            **input_params,
+        )
+        frame_info_parsed["smpl_model_joints"] = model_output_fixed.joints[0]
+        #print(frame_info_parsed['pose_params']["body_pose"], frame_info_parsed['pose_params']["global_orient"])
+        frame_info_parsed['pose_params']["body_pose_fixed"] = copy.deepcopy(new_body_pose)
+        frame_info_parsed['pose_params']["global_orient_fixed"] = copy.deepcopy(new_global_orient)
+        frame_info_parsed['pose_params']["joints_3d_fixed"] = copy.deepcopy(target_keypoints)
 
 
     frame_info_parsed["smpl_model"] = model_output
@@ -2092,37 +2080,22 @@ def parse_frame_info(json_path, img_path, idd, keypoints_fixed_path, data_path):
     return frame_info_parsed, camera
 
 
-def parse_data_to_label(data_path, keypoints_fixed_path, item_id):
-    #### parse keypoints fixed
+def parse_data_to_label(data_path, item_id):
 
-    keypoints_by_id = {}
-    for dirr in os.listdir(keypoints_fixed_path):
-        if dirr.startswith('.'):
-            print(dirr, "skip..")
-            continue
-
-        for skeleton_file in os.listdir(os.path.join(keypoints_fixed_path, dirr, 'skeletons')):
-            if not skeleton_file.endswith('.xml'):
+    if False:
+        for dirr in os.listdir(data_path):
+            if dirr.startswith('.'):
+                print(dirr, "skip..")
                 continue
-            skeleton_parsed = parse_skeleton_xml(os.path.join(keypoints_fixed_path, dirr, 'skeletons', skeleton_file))
-            kps = []
-            for keypoint in skeleton_parsed['skeletons'][0]['keypoints']:
-                kps.append([keypoint['x'], keypoint['y']])
-            keypoints_by_id[skeleton_file[:-4]] = kps
-
-    for dirr in os.listdir(data_path):
-        if dirr.startswith('.'):
-            print(dirr, "skip..")
-            continue
-        print(dirr)
-        for json_file in  os.listdir(os.path.join(data_path, dirr)):
-            if not json_file.endswith('.json'):
+            print(dirr)
+            if dirr != item_id:
                 continue
-            if json_file[:-5] in keypoints_by_id:
+            for json_file in  os.listdir(os.path.join(data_path, dirr)):
+                if not json_file.endswith('.json'):
+                    continue
                 subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
                 with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
                     json_data = json.load(fr)
-                json_data['joints2d_fixed'] = keypoints_by_id[json_file[:-5]]
                 with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
                     json.dump(json_data, fw)
 
@@ -2134,23 +2107,22 @@ def parse_data_to_label(data_path, keypoints_fixed_path, item_id):
         if item_to_label_dir != item_id:
             continue
 
+        print("found ", item_to_label_dir)
         item_info = {'id' : item_to_label_dir, 'frames': []}
         count = 0
         for el in os.listdir(os.path.join(data_path, item_to_label_dir)):
             if not el.endswith('.json'):
                 continue
 
-            if not el[:-5] in keypoints_by_id:
-                continue
-
             count += 1
             if count > 30:
                 break
 
+            print(el, el.split('.json')[0])
+            print(os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '.jpg'))
             frame_info_parsed, camera = parse_frame_info(os.path.join(data_path, item_to_label_dir, el),
-                                          os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '_with_kp.jpg'),
+                                          os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '.jpg'),
                                           el.split('.json')[0],
-                                          keypoints_fixed_path,
                                           data_path)
 
             item_info['frames'].append(frame_info_parsed)
@@ -2170,13 +2142,13 @@ def main(args):
 
     background_img = None
     if args.data_path:
-        item_infos = parse_data_to_label(args.data_path, args.keypoints_fixed_path, args.item_id)
+        item_infos = parse_data_to_label(args.data_path, args.item_id)
 
     # We need to initalize the application, which finds the necessary shaders
     # for rendering and prepares the cross-platform window abstraction.
     gui.Application.instance.initialize()
 
-    w = AppWindow(1200, 900, item_infos, args.labeled_data_path, args.keypoints_fixed_path, args.data_path)
+    w = AppWindow(1200, 900, item_infos, args.labeled_data_path, args.data_path)
 
     # Run the event loop. This will not return until the last window is closed.
     gui.Application.instance.run()
@@ -2187,7 +2159,6 @@ if __name__ == "__main__":
     parser.add_argument('--web', action='store_true', help='Enable web visualization')
     parser.add_argument('--data_path', help='Path to data to label')
     parser.add_argument('--labeled_data_path', help='Folder to store labeled data')
-    parser.add_argument('--keypoints_fixed_path', help='Folder with fixed keypoints')
     parser.add_argument('--item_id')
 
     args = parser.parse_args()

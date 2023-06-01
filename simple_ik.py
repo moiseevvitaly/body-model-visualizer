@@ -76,7 +76,7 @@ def measurements_ik_solver(model, target, init_betas, device='cpu', max_iter=100
     for i in range(max_iter):
         #print("measurements", torch.mean(torch.square((make_measurements(model, optim_betas) - target) / current_measurements)))
         #print("betas", torch.mean(torch.square(optim_betas - init_betas)))
-        mse = torch.mean(torch.square((make_measurements(model, optim_betas) - target))) #+ 0.00001 * torch.sum(torch.square(optim_betas))
+        mse = torch.mean(torch.square((make_measurements(model, optim_betas) - target))) + 0.00001 * torch.sum(torch.square(optim_betas - init_betas))
         if abs(mse - last_mse) < mse_threshold:
             print("early stop")
             break
