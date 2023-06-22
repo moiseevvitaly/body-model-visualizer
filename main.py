@@ -252,7 +252,7 @@ class AppWindow:
         Settings.LIT, Settings.UNLIT, Settings.NORMALS, Settings.DEPTH
     ]
 
-    BODY_MODEL_NAMES = ["SMPL","SMPL2", "SMPL3", "SMPLX", "MANO", "FLAME"]
+    BODY_MODEL_NAMES = ["SMPL","SMPL2"]
     BODY_MODEL_GENDERS = {
         'SMPL': ['neutral', 'male', 'female'],
         'SMPL2': ['neutral', 'male', 'female'],
@@ -361,9 +361,8 @@ class AppWindow:
 
     LABELER_BETAS = torch.zeros(1,10)
 
-    def __init__(self, width, height, item_infos, labeled_data_path, data_path):
+    def __init__(self, width, height, item_infos, data_path):
         self.item_infos = item_infos
-        self.labeled_data_path = labeled_data_path
         self.data_path = data_path
 
         #print("app window pose params smpl", AppWindow.POSE_PARAMS["SMPL"])
@@ -556,10 +555,10 @@ class AppWindow:
         self._previous_frame = gui.Button("Previous frame")
         item_iteration_settings.add_child(self._previous_frame)
         self._previous_frame.set_on_clicked(self._on_previous_frame)
-        self._update_keypoints = gui.Button("Update keypoints")
-        item_iteration_settings.add_child(self._update_keypoints)
-        self._update_keypoints.set_on_clicked(self._on_update_keypoints)
-        self._choose_this_betas = gui.Button("Choose this betas")
+        #self._update_keypoints = gui.Button("Update keypoints")
+        #item_iteration_settings.add_child(self._update_keypoints)
+        #self._update_keypoints.set_on_clicked(self._on_update_keypoints)
+        self._choose_this_betas = gui.Button("Choose this model")
         self._choose_this_betas.set_on_clicked(self._on_choose_this_betas)
         item_iteration_settings.add_child(self._choose_this_betas)
         self._export_results = gui.Button("Export results")
@@ -643,7 +642,7 @@ class AppWindow:
         self._additional_translation = np.zeros(3)
         #print("BETAS", smpl_params["betas"], torch.zeros(1,10), torch.tensor(smpl_params["betas"]))
         #self._body_beta_tensor = copy.deepcopy(torch.tensor([smpl_params["betas"]]))
-        self._body_beta_reset = gui.Button("Reset betas")
+        #self._body_beta_reset = gui.Button("Reset betas")
 
         self._body_beta_text = gui.Label("Betas")
         self._body_beta_text.text = f",".join(f'{x:.1f}'for x in self._body_beta_tensor[0].numpy().tolist())
@@ -694,11 +693,11 @@ class AppWindow:
         self._body_pose_reset = gui.Button("Reset pose")
         self._body_pose_ik = gui.Button("Run IK")
 
-        self._show_joints = gui.Checkbox("Show joints")
-        self._show_joints.set_on_checked(self._on_show_joints)
+        #self._show_joints = gui.Checkbox("Show joints")
+        #self._show_joints.set_on_checked(self._on_show_joints)
 
-        self._show_joint_labels = gui.Checkbox("Show joint labels")
-        self._show_joint_labels.set_on_checked(self._on_show_joint_labels)
+        #self._show_joint_labels = gui.Checkbox("Show joint labels")
+        #self._show_joint_labels.set_on_checked(self._on_show_joint_labels)
 
         self._on_body_model(AppWindow.BODY_MODEL_NAMES[0], 0)
         # self._on_body_pose_comp(list(AppWindow.POSE_PARAMS[AppWindow.BODY_MODEL_NAMES[0]].keys())[0], 0)
@@ -706,7 +705,7 @@ class AppWindow:
         self._body_model_gender.set_on_selection_changed(self._on_body_model_gender)
 
         self._body_beta_val.set_on_value_changed(self._on_body_beta_val)
-        self._body_beta_reset.set_on_clicked(self._on_body_beta_reset)
+        #self._body_beta_reset.set_on_clicked(self._on_body_beta_reset)
         self._body_model_shape_comp.set_on_selection_changed(self._on_body_model_shape_comp)
         print("setting function")
         for measurement_name in self.measurements:
@@ -738,19 +737,19 @@ class AppWindow:
         grid.add_child(self._body_model)
         #grid.add_child(gui.Label("Gender"))
         #grid.add_child(self._body_model_gender)
-        grid.add_child(gui.Label("Beta Component"))
-        grid.add_child(self._body_model_shape_comp)
-        grid.add_child(gui.Label("Beta val:"))
-        grid.add_child(self._body_beta_val)
+        #grid.add_child(gui.Label("Beta Component"))
+        #grid.add_child(self._body_model_shape_comp)
+        #grid.add_child(gui.Label("Beta val:"))
+        #grid.add_child(self._body_beta_val)
         self.model_settings.add_child(grid)
 
         # h = gui.Horiz(0.25 * em)  # row 1
         # h.add_child(self._body_beta_text)
         # self.model_settings.add_child(h)
 
-        h = gui.Horiz(0.25 * em)  # row 2
-        h.add_child(self._body_beta_reset)
-        self.model_settings.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 2
+        #h.add_child(self._body_beta_reset)
+        #self.model_settings.add_child(h)
 
         print("setting grid")
         for measurement_name in self.measurements:
@@ -784,10 +783,10 @@ class AppWindow:
         #h.add_child(self._body_exp_reset)
         #self.model_settings.add_child(h)
 
-        h = gui.Horiz(0.25 * em)  # row 2
-        h.add_child(self._show_joints)
-        h.add_child(self._show_joint_labels)
-        self.model_settings.add_child(h)
+        #h = gui.Horiz(0.25 * em)  # row 2
+        #h.add_child(self._show_joints)
+        #h.add_child(self._show_joint_labels)
+        #self.model_settings.add_child(h)
 
         #h = gui.Horiz(0.25 * em)  # row 3
         #h.add_child(gui.Label("Pose Controls"))
@@ -1143,14 +1142,14 @@ class AppWindow:
 
         self._reset_rot_sliders()
         AppWindow.SELECTED_JOINT = None
-        self._on_show_joints(self._show_joints.checked)
+        #self._on_show_joints(self._show_joints.checked)
 
     def _on_body_model_gender(self, name, index):
         logger.info(f"Changing {self._body_model.selected_text} body model gender to {name}-{index}")
         self._body_beta_val.double_value = 0.0
         self.load_body_model(self._body_model.selected_text, gender=name)
         self._reset_rot_sliders()
-        self._on_show_joints(self._show_joints.checked)
+        #self._on_show_joints(self._show_joints.checked)
         # self._apply_settings()
 
     def _on_body_beta_val(self, val):
@@ -1350,7 +1349,7 @@ class AppWindow:
                 transl = np.array([0.0, 0.0, step])
 
             AppWindow.JOINTS[AppWindow.SELECTED_JOINT] = AppWindow.JOINTS[AppWindow.SELECTED_JOINT] + transl
-            self._on_show_joints(show=True)
+            #self._on_show_joints(show=True)
             return gui.Widget.EventCallbackResult.HANDLED
         return gui.Widget.EventCallbackResult.IGNORED
 
@@ -1663,27 +1662,20 @@ class AppWindow:
 
     def _on_update_keypoints(self):
         cur_frame_info = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]
-        self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'], self.data_path)
+        self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX], camera = parse_frame_info(cur_frame_info['json_path'], cur_frame_info['img_path'], cur_frame_info['id'])
         self.load_body_model(
             self._body_model.selected_text,
             gender=self._body_model_gender.selected_text,
         )
 
     def _on_export_results(self):
-        results_directory = os.path.join(self.labeled_data_path, self.item_infos[AppWindow.CUR_ITEM_INDEX]['id'])
-        if not os.path.exists(results_directory):
-            os.makedirs(results_directory)
-            os.makedirs(results_directory + '/images')
 
-        if self._body_model.selected_text == "SMPL":
-            betas = np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas']).tolist()
-        else:
-            betas = np.array(self._body_beta_tensor).tolist()
         output_dict = {
-            'betas': betas
+            'original_betas': np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas']).tolist(),
+            'result_betas': np.array(self._body_beta_tensor).tolist(),
+            'image_id': self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['id']
         }
-        print("betas {} {} {}".format(betas, self._body_beta_tensor, output_dict))
-        with open(os.path.join(results_directory, 'params.json'), 'w') as fw:
+        with open(os.path.join(self.data_path, 'params.json'), 'w') as fw:
             json.dump(output_dict, fw)
         #for i in range(len(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'])):
         #    AppWindow.CUR_FRAME_INDEX = i
@@ -1692,11 +1684,11 @@ class AppWindow:
         #    self._body_model.selected_text,
         #    gender=self._body_model_gender.selected_text,
         #)
-        img_export_path = os.path.join(results_directory, 'images', self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['id'] + '.jpg')
-        print(img_export_path)
-        frame = self._scene.frame
-        print(frame)
-        self.export_image(img_export_path, frame.width, frame.height)
+        #img_export_path = os.path.join(results_directory, 'images', self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['id'] + '.jpg')
+        #print(img_export_path)
+        #frame = self._scene.frame
+        #print(frame)
+        #self.export_image(img_export_path, frame.width, frame.height)
 
     def add_ground_plane(self):
         logger.info('drawing ground plane')
@@ -1876,7 +1868,7 @@ class AppWindow:
         #AppWindow.BODY_TRANSL = torch.tensor([[0, min_y, 0]])
         AppWindow.BODY_TRANSL = copy.deepcopy(torch.tensor(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]["translation"]) + torch.tensor(additional_translation))
         #print(AppWindow.BODY_TRANSL)
-        self._on_show_joints(self._show_joints.checked)
+        #self._on_show_joints(self._show_joints.checked)
         print("final ok")
 
     def load(self, path):
@@ -1948,22 +1940,7 @@ class AppWindow:
 
         self._scene.scene.scene.render_to_image(on_image)
 
-def parse_frame_info(json_path, img_path, idd, data_path):
-    if False:
-        for dirr in os.listdir(data_path):
-            if dirr.startswith('.'):
-                print(dirr, "skip..")
-                continue
-            print(dirr)
-            for json_file in  os.listdir(os.path.join(data_path, dirr)):
-                if not json_file.endswith('.json'):
-                    continue
-                subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
-                with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
-                    json_data = json.load(fr)
-                with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
-                    json.dump(json_data, fw)
-
+def parse_frame_info(json_path, img_path, idd):
     frame_info = json.load(open(json_path))
 
     frame_info_parsed = {}
@@ -2041,97 +2018,33 @@ def parse_frame_info(json_path, img_path, idd, data_path):
         print(xx - float(model_output.joints[0][i][0]), yy - float(model_output.joints[0][i][1]), z - float(model_output.joints[0][i][2]))
         target_keypoints.append([xx, yy, z])
 
-    #init_pose = copy.deepcopy(AppWindow.POSE_PARAMS[bm][bp])
-
-    if False:
-        target_keypoints = target_keypoints[:24]
-        target_keypoints = torch.from_numpy(np.array(target_keypoints)).float()
-        body_params, global_params = simple_ik_solver(
-            model=model,
-            target=target_keypoints, device='cpu', init=copy.deepcopy(body_pose), global_orient=copy.deepcopy(global_orient),
-            max_iter=50, #transl=torch.tensor([frame_info_parsed["translation"]]),
-            betas=frame_info_parsed["betas"],
-        )
-        body_params = body_params.requires_grad_(False)
-        global_params = global_params.requires_grad_(False)
-        # import ipdb; ipdb.set_trace()
-        new_body_pose = body_params.reshape(1, -1, 3)
-        new_global_orient  = global_params.reshape(1, -1, 3)
-        #print("new pose params")
-        #print(new_body_pose, new_global_orient)
-        #print("old pose params")
-        input_params = {'global_orient': new_global_orient, 'body_pose': new_body_pose}
-        for k, v in input_params.items():
-            input_params[k] = v.reshape(1, -1)
-        model_output_fixed = model(
-            betas=frame_info_parsed["betas"],
-            expression=torch.zeros(1,10),
-            **input_params,
-        )
-        frame_info_parsed["smpl_model_joints"] = model_output_fixed.joints[0]
-        #print(frame_info_parsed['pose_params']["body_pose"], frame_info_parsed['pose_params']["global_orient"])
-        frame_info_parsed['pose_params']["body_pose_fixed"] = copy.deepcopy(new_body_pose)
-        frame_info_parsed['pose_params']["global_orient_fixed"] = copy.deepcopy(new_global_orient)
-        frame_info_parsed['pose_params']["joints_3d_fixed"] = copy.deepcopy(target_keypoints)
-
-
     frame_info_parsed["smpl_model"] = model_output
 
     return frame_info_parsed, camera
 
 
-def parse_data_to_label(data_path, item_id):
-
-    if False:
-        for dirr in os.listdir(data_path):
-            if dirr.startswith('.'):
-                print(dirr, "skip..")
-                continue
-            print(dirr)
-            if dirr != item_id:
-                continue
-            for json_file in  os.listdir(os.path.join(data_path, dirr)):
-                if not json_file.endswith('.json'):
-                    continue
-                subprocess.run("chmod 755 {}".format(os.path.join(data_path, dirr, json_file)), shell=True)
-                with open(os.path.join(data_path, dirr, json_file), 'r') as fr:
-                    json_data = json.load(fr)
-                with open(os.path.join(data_path, dirr, json_file), 'w') as fw:
-                    json.dump(json_data, fw)
+def parse_data_to_label(data_path):
 
     item_infos = []
-    for item_to_label_dir in os.listdir(data_path):
-        if item_to_label_dir.endswith('.'):
-            print("Skip strange directory name {}".format(item_to_label_dir))
+    item_info = {'id' : data_path.split('/')[-1], 'frames': []}
+    count = 0
+    for el in os.listdir(data_path):
+        if not el.endswith('.json') or el == 'params.json':
             continue
-        if item_to_label_dir != item_id:
-            continue
 
-        print("found ", item_to_label_dir)
-        item_info = {'id' : item_to_label_dir, 'frames': []}
-        count = 0
-        for el in os.listdir(os.path.join(data_path, item_to_label_dir)):
-            if not el.endswith('.json'):
-                continue
+        count += 1
+        if count > 50:
+            break
 
-            count += 1
-            if count > 30:
-                break
+        frame_info_parsed, camera = parse_frame_info(os.path.join(data_path, el),
+                                      os.path.join(data_path, el.split('.json')[0] + '.jpg'),
+                                      el.split('.json')[0])
 
-            print(el, el.split('.json')[0])
-            print(os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '.jpg'))
-            frame_info_parsed, camera = parse_frame_info(os.path.join(data_path, item_to_label_dir, el),
-                                          os.path.join(data_path, item_to_label_dir, el.split('.json')[0] + '.jpg'),
-                                          el.split('.json')[0],
-                                          data_path)
+        item_info['frames'].append(frame_info_parsed)
+        item_info['camera'] = camera
 
-            item_info['frames'].append(frame_info_parsed)
-            item_info['camera'] = camera
+    item_infos.append(item_info)
 
-        item_infos.append(item_info)
-        break
-
-    print(item_infos[0]['frames'])
     return item_infos
 
 def main(args):
@@ -2142,13 +2055,13 @@ def main(args):
 
     background_img = None
     if args.data_path:
-        item_infos = parse_data_to_label(args.data_path, args.item_id)
+        item_infos = parse_data_to_label(args.data_path)
 
     # We need to initalize the application, which finds the necessary shaders
     # for rendering and prepares the cross-platform window abstraction.
     gui.Application.instance.initialize()
 
-    w = AppWindow(1200, 900, item_infos, args.labeled_data_path, args.data_path)
+    w = AppWindow(1200, 900, item_infos, args.data_path)
 
     # Run the event loop. This will not return until the last window is closed.
     gui.Application.instance.run()
@@ -2158,8 +2071,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--web', action='store_true', help='Enable web visualization')
     parser.add_argument('--data_path', help='Path to data to label')
-    parser.add_argument('--labeled_data_path', help='Folder to store labeled data')
-    parser.add_argument('--item_id')
 
     args = parser.parse_args()
     main(args)
