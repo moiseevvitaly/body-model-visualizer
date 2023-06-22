@@ -1676,7 +1676,7 @@ class AppWindow:
             os.makedirs(results_directory + '/images')
 
         if self._body_model.selected_text == "SMPL":
-            betas = self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas']
+            betas = np.array(self.item_infos[AppWindow.CUR_ITEM_INDEX]['frames'][AppWindow.CUR_FRAME_INDEX]['betas']).tolist()
         else:
             betas = np.array(self._body_beta_tensor).tolist()
         output_dict = {
@@ -2101,7 +2101,7 @@ def parse_data_to_label(data_path, item_id):
 
     item_infos = []
     for item_to_label_dir in os.listdir(data_path):
-        if "." in item_to_label_dir:
+        if item_to_label_dir.endswith('.'):
             print("Skip strange directory name {}".format(item_to_label_dir))
             continue
         if item_to_label_dir != item_id:
