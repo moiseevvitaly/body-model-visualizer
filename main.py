@@ -254,8 +254,8 @@ class AppWindow:
 
     BODY_MODEL_NAMES = ["SMPL","SMPL2"]
     BODY_MODEL_GENDERS = {
-        'SMPL': ['neutral', 'male', 'female'],
-        'SMPL2': ['neutral', 'male', 'female'],
+        'SMPL': ['neutral'],
+        'SMPL2': ['neutral'],
         'SMPL3': ['neutral', 'male', 'female'],
         'SMPLX': ['neutral', 'male', 'female'],
         'MANO': ['neutral'],
@@ -361,7 +361,7 @@ class AppWindow:
 
     LABELER_BETAS = torch.zeros(1,10)
 
-    def __init__(self, width, height, item_infos, data_path):
+    def __init__(self, width, height, item_infos, betas_from_labeler, data_path):
         self.item_infos = item_infos
         self.data_path = data_path
 
@@ -634,7 +634,11 @@ class AppWindow:
 
         self._body_beta_val = gui.Slider(gui.Slider.DOUBLE)
         self._body_beta_val.set_limits(-2, 2.0)
-        self._body_beta_tensor = torch.zeros(1, 10)
+        if betas_from_labeler:
+            self._body_beta_tensor = torch.tensor(betas_from_labeler)
+        else:
+            self._body_beta_tensor = torch.zeros(1, 10)
+
         extra_params = {'gender': 'neutral'}
         model = SMPL('data/body_models/smpl', **extra_params)
         self._measurements = make_measurements(model, self._body_beta_tensor)
@@ -1979,51 +1983,58 @@ def parse_frame_info(json_path, img_path, idd):
         else:
             body_pose[0, ji - 1] = torch.tensor(axis_angle_2)
 
-    extra_params = {'gender': 'neutral'}
-    model = SMPL('data/body_models/smpl', **extra_params)
+    #extra_params = {'gender': 'neutral'}
+    #model = SMPL('data/body_models/smpl', **extra_params)
     input_params = {'global_orient': global_orient, 'body_pose': body_pose}
     frame_info_parsed['pose_params']["body_pose"] = copy.deepcopy(body_pose)
     frame_info_parsed['pose_params']["global_orient"] = copy.deepcopy(global_orient)
     for k, v in input_params.items():
         input_params[k] = v.reshape(1, -1)
 
-    model_output = model(
-        betas=frame_info_parsed["betas"],
-        expression=torch.zeros(1,10),
-        **input_params,
-    )
+    if False:
+        model_output = model(
+            betas=frame_info_parsed["betas"],
+            expression=torch.zeros(1,10),
+            **input_params,
+        )
 
-    frame_info_parsed['measurement'] = make_measurements(model, frame_info_parsed["betas"])
-    #print("SMPL model joints")
-    #print(model_output.joints[0])
+        frame_info_parsed['measurement'] = make_measurements(model, frame_info_parsed["betas"])
+        #print("SMPL model joints")
+        #print(model_output.joints[0])
 
-    #print("translation", frame_info["translation"])
-    #print("Restored joints")
-    target_keypoints = []
-    for i, joint in enumerate(frame_info["joints2d"]):
-        x = joint[0]
-        y = joint[1]
+        #print("translation", frame_info["translation"])
+        #print("Restored joints")
+        target_keypoints = []
+        for i, joint in enumerate(frame_info["joints2d"]):
+            x = joint[0]
+            y = joint[1]
 
-        z = float(model_output.joints[0][i][2]) + float(frame_info["translation"][2])   
-        f_x = intrinsic_matrix[0][0]
-        f_y = intrinsic_matrix[1][1]
-        c_x = intrinsic_matrix[0][2]
-        c_y = intrinsic_matrix[1][2]
-        print(f_x, f_y, c_x, c_y)
+            z = float(model_output.joints[0][i][2]) + float(frame_info["translation"][2])   
+            f_x = intrinsic_matrix[0][0]
+            f_y = intrinsic_matrix[1][1]
+            c_x = intrinsic_matrix[0][2]
+            c_y = intrinsic_matrix[1][2]
+            print(f_x, f_y, c_x, c_y)
 
-        xx = ((x - c_x) * z) / f_x - float(frame_info["translation"][0])
-        yy = ((y - c_y) * z) / f_y - float(frame_info["translation"][1])
-        z = z - float(frame_info["translation"][2])
+            xx = ((x - c_x) * z) / f_x - float(frame_info["translation"][0])
+            yy = ((y - c_y) * z) / f_y - float(frame_info["translation"][1])
+            z = z - float(frame_info["translation"][2])
 
-        print(xx - float(model_output.joints[0][i][0]), yy - float(model_output.joints[0][i][1]), z - float(model_output.joints[0][i][2]))
-        target_keypoints.append([xx, yy, z])
+            print(xx - float(model_output.joints[0][i][0]), yy - float(model_output.joints[0][i][1]), z - float(model_output.joints[0][i][2]))
+            target_keypoints.append([xx, yy, z])
 
-    frame_info_parsed["smpl_model"] = model_output
+        frame_info_parsed["smpl_model"] = model_output
 
     return frame_info_parsed, camera
 
 
 def parse_data_to_label(data_path):
+
+    betas_from_labeler = None
+    if os.path.exists(os.path.join(data_path, 'params.json')):
+        with open(os.path.join(data_path, 'params.json'), 'r') as fr:
+            params = json.loads(fr.read())
+            betas_from_labeler = params['result_betas']
 
     item_infos = []
     item_info = {'id' : data_path.split('/')[-1], 'frames': []}
@@ -2045,7 +2056,7 @@ def parse_data_to_label(data_path):
 
     item_infos.append(item_info)
 
-    return item_infos
+    return item_infos, betas_from_labeler
 
 def main(args):
     logger.add(sys.stderr, format="{time} {level} {message}")
@@ -2055,13 +2066,13 @@ def main(args):
 
     background_img = None
     if args.data_path:
-        item_infos = parse_data_to_label(args.data_path)
+        item_infos, betas_from_labeler = parse_data_to_label(args.data_path)
 
     # We need to initalize the application, which finds the necessary shaders
     # for rendering and prepares the cross-platform window abstraction.
     gui.Application.instance.initialize()
 
-    w = AppWindow(1200, 900, item_infos, args.data_path)
+    w = AppWindow(1200, 900, item_infos, betas_from_labeler, args.data_path)
 
     # Run the event loop. This will not return until the last window is closed.
     gui.Application.instance.run()
