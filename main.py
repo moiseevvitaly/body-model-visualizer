@@ -1177,10 +1177,20 @@ class AppWindow:
             for name in MEASUREMENT_NAMES:
                 print(name, self._measurements[ID_BY_MEASUREMENT_NAME[name]])
             if val == '+':
-                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.05
+                if measurement_name == "height":
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.02
+                elif measurement_name == "bicep_circle":
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.15
+                else:
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 1.05
                 print("increased")
             else:
-                self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.95
+                if measurement_name == "height":
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.98
+                elif measurement_name == "bicep_circle":
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.85
+                else:
+                    self._target_measurements[ID_BY_MEASUREMENT_NAME[measurement_name]] *= 0.95
                 print("decreased")
             print("Current target measurements are:")
             for name in MEASUREMENT_NAMES:
